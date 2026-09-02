@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <Version>0.1.0</Version>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>AudioIntegrity.Lidarr</AssemblyName>
+    <AssemblyName>Lidarr.Plugin.AudioIntegrity</AssemblyName>
     <RootNamespace>NzbDrone.Core.Plugins.AudioIntegrity</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
@@ -21,4 +22,3 @@
     </Reference>
   </ItemGroup>
 </Project>
-

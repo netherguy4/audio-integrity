@@ -13,7 +13,7 @@ namespace NzbDrone.Core.Plugins
     {
         public override string Name => "Audio Integrity";
         public override string Owner => "netherguy4";
-        public override string GithubUrl => "https://github.com/netherguy4/audio-integrity";
+        public override string GithubUrl => "https://github.com/netherguy4/Lidarr.Plugin.AudioIntegrity";
     }
 }
 

@@ -10,5 +10,5 @@ RUN dotnet publish lidarr-plugin/AudioIntegrity.Lidarr.csproj \
     -o /out
 
 FROM scratch
-COPY --from=build /out/AudioIntegrity.Lidarr.dll /
-
+COPY --from=build /out/Lidarr.Plugin.AudioIntegrity.dll /
+COPY --from=build /out/Lidarr.Plugin.AudioIntegrity.deps.json /
