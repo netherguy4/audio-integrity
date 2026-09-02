@@ -3,4 +3,4 @@
 /.playwright-cli
 /.impeccable/review/*.png
 /.impeccable/review/*.json
-
+/.impeccable/hook.cache.json

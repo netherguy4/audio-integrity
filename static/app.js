@@ -161,4 +161,4 @@ $$('.nav-link[href]').forEach(link => link.addEventListener('click', () => { $$(
 
 applyTheme(localStorage.getItem('audio-integrity-theme') || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light'));
 applyLanguage();
-api('/api/session').then(showApp).catch(showLogin);
+api('/api/session').then(session => session.authenticated ? showApp() : showLogin()).catch(showLogin);

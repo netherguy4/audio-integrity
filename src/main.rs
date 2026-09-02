@@ -126,6 +126,11 @@ struct VerifyRequest {
 }
 
 #[derive(Serialize)]
+struct SessionResponse {
+    authenticated: bool,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifyResponse {
     accepted: bool,
@@ -218,6 +223,7 @@ async fn main() {
         .route("/", get(index))
         .route("/styles.css", get(styles))
         .route("/app.js", get(script))
+        .route("/favicon.ico", get(favicon))
         .route("/healthz", get(health))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
@@ -277,6 +283,10 @@ async fn script() -> Response<Body> {
     )
 }
 
+async fn favicon() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 fn asset(content: &'static str, content_type: &'static str) -> Response<Body> {
     Response::builder()
         .header(header::CONTENT_TYPE, content_type)
@@ -313,11 +323,9 @@ async fn logout() -> impl IntoResponse {
 }
 
 async fn session(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if authorized(&headers, &state) {
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::UNAUTHORIZED
-    }
+    Json(SessionResponse {
+        authenticated: authorized(&headers, &state),
+    })
 }
 
 async fn summary(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
