@@ -1,0 +1,6 @@
+/target
+/.env
+/.playwright-cli
+/.impeccable/review/*.png
+/.impeccable/review/*.json
+

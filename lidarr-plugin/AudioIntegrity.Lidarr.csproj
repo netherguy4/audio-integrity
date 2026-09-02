@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>AudioIntegrity.Lidarr</AssemblyName>
+    <RootNamespace>NzbDrone.Core.Plugins.AudioIntegrity</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Lidarr.Core">
+      <HintPath>$(LidarrBin)/Lidarr.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Lidarr.Common">
+      <HintPath>$(LidarrBin)/Lidarr.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="NLog">
+      <HintPath>$(LidarrBin)/NLog.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
+

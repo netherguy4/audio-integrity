@@ -1,0 +1,14 @@
+FROM lscr.io/linuxserver/lidarr@sha256:82cf3b0d7ef3ee116c82ca02fddc844b922eeab32da8830e4245b1238f44f9e4 AS lidarr
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS build
+WORKDIR /src
+COPY --from=lidarr /app/lidarr/bin /lidarr-bin
+COPY lidarr-plugin ./lidarr-plugin
+RUN dotnet publish lidarr-plugin/AudioIntegrity.Lidarr.csproj \
+    -c Release \
+    -p:LidarrBin=/lidarr-bin \
+    -o /out
+
+FROM scratch
+COPY --from=build /out/AudioIntegrity.Lidarr.dll /
+

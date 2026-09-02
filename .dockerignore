@@ -1,0 +1,8 @@
+target
+.git
+.env
+.playwright-cli
+.impeccable/review
+lidarr-plugin/bin
+lidarr-plugin/obj
+
