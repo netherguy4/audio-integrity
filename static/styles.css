@@ -547,16 +547,19 @@ svg {
 .live-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 0;
   margin-top: 14px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 .live-meta > span {
   display: grid;
   gap: 2px;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-2);
+  padding: 10px 11px;
+  border-left: 1px solid var(--border);
+}
+.live-meta > span:first-child {
+  border-left: 0;
 }
 .live-meta small {
   color: var(--muted);
@@ -573,17 +576,13 @@ svg {
   color: var(--amber);
 }
 .event-log {
-  margin-top: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
+  margin-top: 0;
 }
 .event-log-head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 11px;
-  background: var(--panel-2);
+  padding: 10px 0 7px;
   font-size: 0.7rem;
 }
 .event-log-head small {
@@ -595,12 +594,13 @@ svg {
   padding: 0;
   max-height: 126px;
   overflow: auto;
+  border-top: 1px solid var(--border);
 }
 .event-log li {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr);
   gap: 10px;
-  padding: 7px 11px;
+  padding: 7px 0;
   border-top: 1px solid var(--border);
   font: 500 0.68rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
@@ -1019,6 +1019,8 @@ footer code {
   }
   .live-meta > span:last-child {
     grid-column: 1/-1;
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
   .event-log-head small {
     display: none;
