@@ -7,6 +7,7 @@ Read-only, self-hosted verification for large audio libraries.
 - Other formats: full FFmpeg audio decode; stderr at error level is treated as a failure even when FFmpeg exits zero.
 - Persistent SQLite evidence keyed by path, size, nanosecond mtime, and validator version.
 - Manual incremental or forced full scans, one sequential worker for HDD-friendly access.
+- Authenticated WebSocket updates keep every open console session on the same live scan state.
 - A fail-closed Lidarr import plugin asks the same service for an integrity verdict before any library mutation.
 
 The music, download, and manual-import mounts are read-only. Audio Integrity has no file mutation endpoints.
@@ -29,4 +30,3 @@ mise run check
 ```
 
 Run the container with a small read-only fixture directory mounted at `/music`; never point development scans at the production library.
-

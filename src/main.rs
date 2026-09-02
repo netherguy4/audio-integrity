@@ -16,7 +16,7 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Query, State},
+    extract::{Query, State, WebSocketUpgrade, ws::Message},
     http::{HeaderMap, Response, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use constant_time_eq::constant_time_eq;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::{error, info};
 use walkdir::WalkDir;
@@ -43,6 +44,7 @@ struct AppState {
     lidarr_token: Arc<str>,
     scan: Arc<Mutex<ScanStatus>>,
     cancel: Arc<AtomicBool>,
+    events: broadcast::Sender<RealtimeEvent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +64,7 @@ struct ScanStatus {
     error_files: u64,
     total_bytes: u64,
     processed_bytes: u64,
+    read_bytes: u64,
     current_path: Option<String>,
     current_validator: Option<String>,
     message: Option<String>,
@@ -74,6 +77,12 @@ struct LogLine {
     at: DateTime<Utc>,
     level: String,
     text: String,
+}
+
+#[derive(Clone, Serialize)]
+struct RealtimeEvent {
+    kind: &'static str,
+    status: ScanStatus,
 }
 
 impl Default for ScanStatus {
@@ -93,6 +102,7 @@ impl Default for ScanStatus {
             error_files: 0,
             total_bytes: 0,
             processed_bytes: 0,
+            read_bytes: 0,
             current_path: None,
             current_validator: None,
             message: None,
@@ -204,6 +214,7 @@ async fn main() {
     let db_path = data_dir.join("audio-integrity.sqlite3");
     init_db(&db_path).expect("initialize database");
 
+    let (events, _) = broadcast::channel(256);
     let state = AppState {
         db_path,
         library_root: PathBuf::from(env_var("LIBRARY_ROOT", "/music")),
@@ -217,6 +228,7 @@ async fn main() {
         lidarr_token: required_env("LIDARR_TOKEN").into(),
         scan: Arc::new(Mutex::new(ScanStatus::default())),
         cancel: Arc::new(AtomicBool::new(false)),
+        events,
     };
 
     let app = Router::new()
@@ -230,6 +242,7 @@ async fn main() {
         .route("/api/session", get(session))
         .route("/api/summary", get(summary))
         .route("/api/status", get(status))
+        .route("/api/realtime", get(realtime))
         .route("/api/results", get(results))
         .route("/api/history", get(history))
         .route("/api/scans", post(start_scan))
@@ -345,6 +358,58 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> impl IntoR
     Json(state.scan.lock().unwrap().clone()).into_response()
 }
 
+async fn realtime(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    ws.on_upgrade(move |mut socket| async move {
+        let mut receiver = state.events.subscribe();
+        let initial = RealtimeEvent {
+            kind: "status",
+            status: state.scan.lock().unwrap().clone(),
+        };
+        if let Ok(payload) = serde_json::to_string(&initial)
+            && socket.send(Message::Text(payload.into())).await.is_err()
+        {
+            return;
+        }
+        loop {
+            tokio::select! {
+                event = receiver.recv() => match event {
+                    Ok(event) => {
+                        if let Ok(payload) = serde_json::to_string(&event)
+                            && socket.send(Message::Text(payload.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let snapshot = RealtimeEvent {
+                            kind: "status",
+                            status: state.scan.lock().unwrap().clone(),
+                        };
+                        if let Ok(payload) = serde_json::to_string(&snapshot)
+                            && socket.send(Message::Text(payload.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                incoming = socket.recv() => match incoming {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
+        }
+    })
+    .into_response()
+}
+
 async fn results(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -391,7 +456,9 @@ async fn start_scan(
             started_at: Some(Utc::now()),
             ..Default::default()
         };
+        push_log(&mut scan, "info", format!("{} scan started", body.mode));
     }
+    publish_status(&state);
     state.cancel.store(false, Ordering::Relaxed);
     let worker_state = state.clone();
     let mode = body.mode;
@@ -406,10 +473,18 @@ async fn cancel_scan(State(state): State<AppState>, headers: HeaderMap) -> impl 
     if !authorized(&headers, &state) {
         return StatusCode::UNAUTHORIZED;
     }
-    let mut scan = state.scan.lock().unwrap();
-    if scan.phase == "discovering" || scan.phase == "scanning" {
-        state.cancel.store(true, Ordering::Relaxed);
-        scan.phase = "cancelling".into();
+    let accepted = {
+        let mut scan = state.scan.lock().unwrap();
+        if scan.phase == "discovering" || scan.phase == "scanning" {
+            state.cancel.store(true, Ordering::Relaxed);
+            scan.phase = "cancelling".into();
+            true
+        } else {
+            false
+        }
+    };
+    if accepted {
+        publish_status(&state);
         StatusCode::ACCEPTED
     } else {
         StatusCode::CONFLICT
@@ -488,6 +563,7 @@ fn run_scan(state: AppState, mode: String) {
         Err(err) => return fail_scan(&state, format!("database: {err}")),
     };
     state.scan.lock().unwrap().run_id = Some(run_id);
+    publish_status(&state);
 
     let files = discover_files(&state.library_root);
     let (files, total_bytes) = match files {
@@ -508,6 +584,7 @@ fn run_scan(state: AppState, mode: String) {
             format!("Discovered {} audio files", files.len()),
         );
     }
+    publish_status(&state);
 
     for (path, size) in files {
         if state.cancel.load(Ordering::Relaxed) {
@@ -524,6 +601,7 @@ fn run_scan(state: AppState, mode: String) {
             scan.current_path = Some(relative.clone());
             scan.current_validator = Some(validator_for(&path).into());
         }
+        publish_status(&state);
         match verify_one_with_connection(&connection, &path, "library", mode == "full") {
             Ok((result, cached)) => {
                 let mut scan = state.scan.lock().unwrap();
@@ -532,6 +610,7 @@ fn run_scan(state: AppState, mode: String) {
                 if cached {
                     scan.skipped_files += 1;
                 } else {
+                    scan.read_bytes += size;
                     if result.authenticity == "likely_lossy" {
                         scan.suspect_files += 1;
                         push_log(
@@ -568,10 +647,12 @@ fn run_scan(state: AppState, mode: String) {
                 let mut scan = state.scan.lock().unwrap();
                 scan.processed_files += 1;
                 scan.processed_bytes += size;
+                scan.read_bytes += size;
                 scan.error_files += 1;
                 push_log(&mut scan, "warning", format!("{relative}: {err}"));
             }
         }
+        publish_status(&state);
     }
     finish_scan(&state, &connection, "completed");
 }
@@ -829,6 +910,8 @@ fn finish_scan(state: &AppState, connection: &Connection, status: &str) {
     {
         error!(%err, "could not finalize scan run");
     }
+    drop(scan);
+    publish_status(state);
 }
 
 fn fail_scan(state: &AppState, message: String) {
@@ -837,6 +920,15 @@ fn fail_scan(state: &AppState, message: String) {
     scan.finished_at = Some(Utc::now());
     scan.message = Some(message.clone());
     push_log(&mut scan, "error", message);
+    drop(scan);
+    publish_status(state);
+}
+
+fn publish_status(state: &AppState) {
+    let _ = state.events.send(RealtimeEvent {
+        kind: "status",
+        status: state.scan.lock().unwrap().clone(),
+    });
 }
 
 fn push_log(scan: &mut ScanStatus, level: &str, text: String) {
@@ -891,7 +983,9 @@ fn load_summary(path: &Path) -> Result<Summary, String> {
     let connection = Connection::open(path).map_err(|err| err.to_string())?;
     let (known, healthy, corrupt, suspects, errors, bytes): (i64, i64, i64, i64, i64, i64) = connection
         .query_row(
-            "SELECT COUNT(*), SUM(verdict='healthy'), SUM(verdict='corrupt'), SUM(authenticity='likely_lossy'), SUM(verdict='error'), COALESCE(SUM(size),0) FROM file_results",
+            "SELECT COUNT(*), COALESCE(SUM(verdict='healthy'),0), COALESCE(SUM(verdict='corrupt'),0),
+                    COALESCE(SUM(authenticity='likely_lossy'),0), COALESCE(SUM(verdict='error'),0),
+                    COALESCE(SUM(size),0) FROM file_results",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )

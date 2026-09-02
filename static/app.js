@@ -1,13 +1,13 @@
 const dictionary = {
   ru: {
-    offline:'Нет связи с сервером. Повторяем подключение…',loginTitle:'Вход в консоль',loginLead:'Строгая проверка библиотеки без изменения файлов.',username:'Пользователь',password:'Пароль',loginError:'Не удалось войти.',loginAction:'Войти',readOnly:'Только чтение',overview:'Обзор',results:'Результаты',history:'История',lidarrGate:'Защита Lidarr',failClosed:'fail-closed',logout:'Выйти',libraryControl:'Контроль медиатеки',pageTitle:'Целостность аудио',language:'Язык',idle:'Готово к проверке',discovering:'Поиск файлов',scanning:'Идёт проверка',cancelling:'Останавливаем',completed:'Проверка завершена',cancelled:'Проверка остановлена',failed:'Ошибка проверки',scanTitle:'Проверка библиотеки',scanLead:'Неизменённые файлы будут взяты из кэша. Музыка открывается только для чтения.',scanIncremental:'Проверить изменения',scanFull:'Полный аудит',cancel:'Остановить',fullConfirmTitle:'Перепроверить всю библиотеку?',fullConfirmText:'Кэш будет проигнорирован; чтение ~786 GiB может занять несколько часов.',startFull:'Начать полный аудит',nevermind:'Не сейчас',currentFile:'Текущий файл',verified:'Проверено',cache:'Из кэша',corrupt:'Повреждено',suspect:'Вероятно lossy',read:'Прочитано',knownState:'Известное состояние',tracks:'треков',lastAudit:'последний аудит',healthy:'Целые',evidence:'Проверяемые данные',resultTitle:'Результаты файлов',allResults:'Все результаты',onlyCorrupt:'Только повреждённые',onlySuspect:'Вероятно lossy',onlyErrors:'Ошибки проверки',onlyHealthy:'Только целые',search:'Поиск по пути…',state:'Состояние',path:'Путь',authenticity:'Источник',format:'Формат',checked:'Проверен',noResults:'Пока нет результатов',noResultsLead:'Запустите первую проверку библиотеки.',auditTrail:'Журнал аудита',footerReadOnly:'Файловая система медиатеки подключена только для чтения.',healthyBadge:'Целый',corruptBadge:'Повреждён',errorBadge:'Ошибка',likely_genuine:'Вероятно lossless',likely_lossy:'Вероятно lossy',unknown:'Неизвестно',not_applicable:'Не применимо',details:'Детали валидатора',incremental:'Изменения',full:'Полный',files:'файлов',cached:'кэш',defects:'дефектов',never:'никогда'
+    offline:'Нет связи с сервером. Повторяем подключение…',loginTitle:'Вход в консоль',loginLead:'Строгая проверка библиотеки без изменения файлов.',username:'Пользователь',password:'Пароль',loginError:'Не удалось войти.',loginAction:'Войти',readOnly:'Только чтение',overview:'Обзор',results:'Результаты',history:'История',lidarrPolicy:'Политика импорта',failClosed:'fail-closed',logout:'Выйти',pageTitle:'Целостность аудио',language:'Язык',idle:'Готово к проверке',discovering:'Поиск файлов',scanning:'Идёт проверка',cancelling:'Останавливаем',completed:'Проверка завершена',cancelled:'Проверка остановлена',failed:'Ошибка проверки',scanTitle:'Проверка библиотеки',scanLead:'Неизменённые файлы будут взяты из кэша. Музыка открывается только для чтения.',scanIncremental:'Проверить изменения',scanFull:'Полный аудит',cancel:'Остановить',fullConfirmTitle:'Перепроверить всю библиотеку?',fullConfirmText:'Кэш будет проигнорирован; чтение ~786 GiB может занять несколько часов.',startFull:'Начать полный аудит',nevermind:'Не сейчас',currentFile:'Текущий файл',throughput:'Скорость',eta:'Осталось',connection:'Обновления',connecting:'Подключение…',live:'В реальном времени',reconnecting:'Переподключение…',liveLog:'События проверки',liveLogHint:'последние события в реальном времени',noEvents:'Событий пока нет.',verified:'Проверено',cache:'Из кэша',corrupt:'Повреждено',suspect:'Вероятно lossy',read:'Прочитано',tracks:'треков',lastAudit:'последний аудит',healthy:'Целые',resultTitle:'Результаты файлов',authNote:'«Вероятно lossy» — спектральная эвристика для ручной проверки, а не признак повреждения файла.',allResults:'Все результаты',onlyCorrupt:'Только повреждённые',onlySuspect:'Вероятно lossy',onlyErrors:'Ошибки проверки',onlyHealthy:'Только целые',search:'Поиск по пути…',state:'Состояние',path:'Путь',authenticity:'Подлинность',format:'Формат',checked:'Проверен',noResults:'Пока нет результатов',noResultsLead:'Запустите первую проверку библиотеки.',footerReadOnly:'Файловая система медиатеки подключена только для чтения.',healthyBadge:'Целый',corruptBadge:'Повреждён',errorBadge:'Ошибка',likely_genuine:'Вероятно lossless',likely_lossy:'Вероятно lossy',unknown:'Неизвестно',pending:'Ожидает',not_applicable:'Не применимо',details:'Детали валидатора',incremental:'Изменения',full:'Полный',files:'файлов',cached:'кэш',defects:'дефектов',never:'никогда'
   },
   en: {
-    offline:'Server unavailable. Reconnecting…',loginTitle:'Console sign in',loginLead:'Strict library validation without modifying files.',username:'Username',password:'Password',loginError:'Sign in failed.',loginAction:'Sign in',readOnly:'Read only',overview:'Overview',results:'Results',history:'History',lidarrGate:'Lidarr gate',failClosed:'fail-closed',logout:'Sign out',libraryControl:'Library control',pageTitle:'Audio integrity',language:'Language',idle:'Ready to scan',discovering:'Discovering files',scanning:'Scan running',cancelling:'Stopping safely',completed:'Scan completed',cancelled:'Scan stopped',failed:'Scan failed',scanTitle:'Library verification',scanLead:'Unchanged files will use cached evidence. Music is opened read-only.',scanIncremental:'Check changes',scanFull:'Full audit',cancel:'Stop',fullConfirmTitle:'Recheck the entire library?',fullConfirmText:'The cache will be ignored; reading ~786 GiB can take several hours.',startFull:'Start full audit',nevermind:'Not now',currentFile:'Current file',verified:'Verified',cache:'From cache',corrupt:'Corrupt',suspect:'Likely lossy',read:'Read',knownState:'Known state',tracks:'tracks',lastAudit:'last audit',healthy:'Healthy',evidence:'Verifiable evidence',resultTitle:'File results',allResults:'All results',onlyCorrupt:'Corrupt only',onlySuspect:'Likely lossy',onlyErrors:'Validation errors',onlyHealthy:'Healthy only',search:'Search paths…',state:'State',path:'Path',authenticity:'Source',format:'Format',checked:'Checked',noResults:'No results yet',noResultsLead:'Start the first library scan.',auditTrail:'Audit trail',footerReadOnly:'The library filesystem is mounted read-only.',healthyBadge:'Healthy',corruptBadge:'Corrupt',errorBadge:'Error',likely_genuine:'Likely lossless',likely_lossy:'Likely lossy',unknown:'Unknown',not_applicable:'Not applicable',details:'Validator details',incremental:'Changes',full:'Full',files:'files',cached:'cached',defects:'defects',never:'never'
+    offline:'Server unavailable. Reconnecting…',loginTitle:'Console sign in',loginLead:'Strict library validation without modifying files.',username:'Username',password:'Password',loginError:'Sign in failed.',loginAction:'Sign in',readOnly:'Read only',overview:'Overview',results:'Results',history:'History',lidarrPolicy:'Import policy',failClosed:'fail-closed',logout:'Sign out',pageTitle:'Audio integrity',language:'Language',idle:'Ready to scan',discovering:'Discovering files',scanning:'Scan running',cancelling:'Stopping safely',completed:'Scan completed',cancelled:'Scan stopped',failed:'Scan failed',scanTitle:'Library verification',scanLead:'Unchanged files will use cached evidence. Music is opened read-only.',scanIncremental:'Check changes',scanFull:'Full audit',cancel:'Stop',fullConfirmTitle:'Recheck the entire library?',fullConfirmText:'The cache will be ignored; reading ~786 GiB can take several hours.',startFull:'Start full audit',nevermind:'Not now',currentFile:'Current file',throughput:'Throughput',eta:'ETA',connection:'Updates',connecting:'Connecting…',live:'Live',reconnecting:'Reconnecting…',liveLog:'Scan events',liveLogHint:'latest events delivered in real time',noEvents:'No events yet.',verified:'Verified',cache:'From cache',corrupt:'Corrupt',suspect:'Likely lossy',read:'Read',tracks:'tracks',lastAudit:'last audit',healthy:'Healthy',resultTitle:'File results',authNote:'“Likely lossy” is spectral evidence for manual review, not a corruption verdict.',allResults:'All results',onlyCorrupt:'Corrupt only',onlySuspect:'Likely lossy',onlyErrors:'Validation errors',onlyHealthy:'Healthy only',search:'Search paths…',state:'State',path:'Path',authenticity:'Authenticity',format:'Format',checked:'Checked',noResults:'No results yet',noResultsLead:'Start the first library scan.',footerReadOnly:'The library filesystem is mounted read-only.',healthyBadge:'Healthy',corruptBadge:'Corrupt',errorBadge:'Error',likely_genuine:'Likely lossless',likely_lossy:'Likely lossy',unknown:'Unknown',pending:'Pending',not_applicable:'Not applicable',details:'Validator details',incremental:'Changes',full:'Full',files:'files',cached:'cached',defects:'defects',never:'never'
   }
 };
 
-const state = { lang: localStorage.getItem('audio-integrity-lang') || (navigator.language.startsWith('ru') ? 'ru' : 'en'), timer: null, resultsTimer: null };
+const state = { lang: localStorage.getItem('audio-integrity-lang') || (navigator.language.startsWith('ru') ? 'ru' : 'en'), socket:null, reconnectTimer:null, connectionKey:'connecting', lastCounters:null };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const t = key => dictionary[state.lang][key] || key;
@@ -37,15 +37,16 @@ async function api(path, options = {}) {
 function showLogin() {
   $('#app-view').hidden = true;
   $('#login-view').hidden = false;
-  clearInterval(state.timer);
+  clearTimeout(state.reconnectTimer);
+  if (state.socket) state.socket.close();
+  state.socket = null;
 }
 
 function showApp() {
   $('#login-view').hidden = true;
   $('#app-view').hidden = false;
   refreshAll();
-  clearInterval(state.timer);
-  state.timer = setInterval(refreshStatus, 1600);
+  connectRealtime();
 }
 
 function formatNumber(value) { return new Intl.NumberFormat(state.lang).format(value || 0); }
@@ -56,6 +57,13 @@ function formatBytes(value) {
   return `${(value / 1024 ** index).toLocaleString(state.lang, {maximumFractionDigits:index > 2 ? 2 : 1})} ${units[index]}`;
 }
 function formatDate(value) { return value ? new Intl.DateTimeFormat(state.lang, {dateStyle:'medium',timeStyle:'short'}).format(new Date(value)) : t('never'); }
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  if (seconds < 60) return `< 1 ${state.lang === 'ru' ? 'мин' : 'min'}`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.ceil((seconds % 3600) / 60);
+  return hours ? `${hours} ${state.lang === 'ru' ? 'ч' : 'h'} ${minutes} ${state.lang === 'ru' ? 'мин' : 'min'}` : `${minutes} ${state.lang === 'ru' ? 'мин' : 'min'}`;
+}
 function escapeHtml(value) { const div=document.createElement('div'); div.textContent=value ?? ''; return div.innerHTML; }
 
 async function refreshAll() {
@@ -67,6 +75,11 @@ async function refreshStatus() {
   if ($('#app-view').hidden) return;
   try {
     const scan = await api('/api/status');
+    renderStatus(scan);
+  } catch { $('#offline').hidden = false; }
+}
+
+function renderStatus(scan) {
     const running = ['discovering','scanning','cancelling'].includes(scan.phase);
     $('#phase').textContent = t(scan.phase);
     $('#phase-dot').className = `status-dot ${running ? 'running' : scan.phase === 'failed' ? 'failed' : scan.phase === 'completed' ? 'ok' : 'idle'}`;
@@ -74,6 +87,7 @@ async function refreshStatus() {
     $('#progress-label').textContent = `${formatNumber(scan.processedFiles)} / ${formatNumber(scan.totalFiles)}`;
     $('#progress-percent').textContent = `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
     $('#progress-bar').style.width = `${percent}%`;
+    $('#scan-activity').hidden = !running;
     $('#current-path').textContent = scan.currentPath || '—';
     $('#current-path').title = scan.currentPath || '';
     $('#current-validator').textContent = scan.currentValidator ? `${scan.currentValidator}${scan.currentValidator.startsWith('flac') ? ' · isflac spectrum' : ''}` : 'flac --test · isflac spectrum';
@@ -81,15 +95,55 @@ async function refreshStatus() {
     $('#metric-skipped').textContent = formatNumber(scan.skippedFiles);
     $('#metric-corrupt').textContent = formatNumber(scan.corruptFiles);
     $('#metric-suspect').textContent = formatNumber(scan.suspectFiles);
-    $('#metric-bytes').textContent = formatBytes(scan.processedBytes);
+    $('#metric-bytes').textContent = formatBytes(scan.readBytes);
+    const elapsed = scan.startedAt ? Math.max(1, (Date.now() - Date.parse(scan.startedAt)) / 1000) : 0;
+    const throughput = elapsed && scan.readBytes ? scan.readBytes / elapsed : 0;
+    const filesPerSecond = elapsed && scan.processedFiles ? scan.processedFiles / elapsed : 0;
+    const eta = running && filesPerSecond ? (scan.totalFiles - scan.processedFiles) / filesPerSecond : NaN;
+    $('#live-throughput').textContent = throughput ? `${formatBytes(throughput)}/s` : '—';
+    $('#live-eta').textContent = formatDuration(eta);
+    const log = scan.log || [];
+    $('#event-log-list').innerHTML = log.length ? log.slice(-6).map(line => `<li class="${escapeHtml(line.level)}"><time>${escapeHtml(new Intl.DateTimeFormat(state.lang,{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(line.at)))}</time><span>${escapeHtml(line.text)}</span></li>`).join('') : `<li class="empty-log">${t('noEvents')}</li>`;
     $('#scan-incremental').disabled = running;
     $('#scan-full').disabled = running;
     $('#scan-cancel').hidden = !running;
-    if (!running && ['completed','cancelled','failed'].includes(scan.phase)) {
-      clearTimeout(state.resultsTimer);
-      state.resultsTimer = setTimeout(() => Promise.allSettled([refreshSummary(),refreshResults(),refreshHistory()]), 300);
+    const counters = `${scan.corruptFiles}:${scan.suspectFiles}:${scan.errorFiles}`;
+    if (state.lastCounters !== null && state.lastCounters !== counters) {
+      Promise.allSettled([refreshSummary(), refreshResults()]);
     }
-  } catch { $('#offline').hidden = false; }
+    state.lastCounters = counters;
+    if (!running && ['completed','cancelled','failed'].includes(scan.phase)) refreshHistory();
+}
+
+function setConnection(key) {
+  state.connectionKey = key;
+  $('#live-connection').dataset.i18n = key;
+  $('#live-connection').textContent = t(key);
+  $('#live-connection').className = key;
+}
+
+function connectRealtime() {
+  if ($('#app-view').hidden || state.socket?.readyState === WebSocket.OPEN || state.socket?.readyState === WebSocket.CONNECTING) return;
+  clearTimeout(state.reconnectTimer);
+  setConnection('connecting');
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${location.host}/api/realtime`);
+  state.socket = socket;
+  socket.addEventListener('open', () => { setConnection('live'); $('#offline').hidden = true; });
+  socket.addEventListener('message', event => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.kind === 'status') renderStatus(payload.status);
+    } catch {}
+  });
+  socket.addEventListener('close', () => {
+    if (state.socket === socket) state.socket = null;
+    if (!$('#app-view').hidden) {
+      setConnection('reconnecting');
+      state.reconnectTimer = setTimeout(connectRealtime, 1500);
+    }
+  });
+  socket.addEventListener('error', () => socket.close());
 }
 
 async function refreshSummary() {
