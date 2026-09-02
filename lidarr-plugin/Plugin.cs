@@ -53,7 +53,10 @@ namespace NzbDrone.Core.MediaFiles.TrackImport.Specifications
                 using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
                 client.DefaultRequestHeaders.Add("X-Integrity-Token", token);
                 client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                var request = JsonSerializer.Serialize(new VerifyRequest(item.Path));
+                var request = JsonSerializer.Serialize(new VerifyRequest(item.Path), new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
                 using var response = client.PostAsync(
                     $"{serviceUrl}/internal/lidarr/verify",
                     new StringContent(request, Encoding.UTF8, "application/json")
