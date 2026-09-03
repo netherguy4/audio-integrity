@@ -10,7 +10,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -45,6 +45,7 @@ struct AppState {
     scan: Arc<Mutex<ScanStatus>>,
     cancel: Arc<AtomicBool>,
     events: broadcast::Sender<RealtimeEvent>,
+    scan_workers: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +230,10 @@ async fn main() {
         scan: Arc::new(Mutex::new(ScanStatus::default())),
         cancel: Arc::new(AtomicBool::new(false)),
         events,
+        scan_workers: env_var("SCAN_WORKERS", "2")
+            .parse::<usize>()
+            .unwrap_or(2)
+            .clamp(1, 4),
     };
 
     let app = Router::new()
@@ -551,7 +556,7 @@ async fn verify_import(
 
 fn run_scan(state: AppState, mode: String) {
     let started_at = Utc::now();
-    let connection = match Connection::open(&state.db_path) {
+    let connection = match open_db(&state.db_path) {
         Ok(connection) => connection,
         Err(err) => return fail_scan(&state, format!("database: {err}")),
     };
@@ -586,75 +591,124 @@ fn run_scan(state: AppState, mode: String) {
     }
     publish_status(&state);
 
-    for (path, size) in files {
-        if state.cancel.load(Ordering::Relaxed) {
-            finish_scan(&state, &connection, "cancelled");
-            return;
+    let worker_count = state.scan_workers.min(files.len().max(1));
+    {
+        let mut scan = state.scan.lock().unwrap();
+        push_log(
+            &mut scan,
+            "info",
+            format!("Checking with {worker_count} parallel workers"),
+        );
+    }
+    publish_status(&state);
+
+    let queue = Arc::new(Mutex::new(VecDeque::from(files)));
+    let worker_error = Arc::new(Mutex::new(None));
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let state = state.clone();
+            let queue = Arc::clone(&queue);
+            let worker_error = Arc::clone(&worker_error);
+            let mode = mode.clone();
+            scope.spawn(move || {
+                let worker_connection = match open_db(&state.db_path) {
+                    Ok(connection) => connection,
+                    Err(err) => {
+                        *worker_error.lock().unwrap() = Some(format!("database: {err}"));
+                        return;
+                    }
+                };
+                loop {
+                    if state.cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let Some((path, size)) = queue.lock().unwrap().pop_front() else {
+                        return;
+                    };
+                    process_scan_file(&state, &worker_connection, &path, size, mode == "full");
+                }
+            });
         }
-        let relative = path
-            .strip_prefix(&state.library_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
-        {
+    });
+
+    if let Some(err) = worker_error.lock().unwrap().take() {
+        fail_scan(&state, err);
+    } else if state.cancel.load(Ordering::Relaxed) {
+        finish_scan(&state, &connection, "cancelled");
+    } else {
+        finish_scan(&state, &connection, "completed");
+    }
+}
+
+fn process_scan_file(
+    state: &AppState,
+    connection: &Connection,
+    path: &Path,
+    size: u64,
+    force: bool,
+) {
+    let relative = path
+        .strip_prefix(&state.library_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned();
+    {
+        let mut scan = state.scan.lock().unwrap();
+        scan.current_path = Some(relative.clone());
+        scan.current_validator = Some(validator_for(path).into());
+    }
+    publish_status(state);
+    match verify_one_with_connection(connection, path, "library", force) {
+        Ok((result, cached)) => {
             let mut scan = state.scan.lock().unwrap();
-            scan.current_path = Some(relative.clone());
-            scan.current_validator = Some(validator_for(&path).into());
-        }
-        publish_status(&state);
-        match verify_one_with_connection(&connection, &path, "library", mode == "full") {
-            Ok((result, cached)) => {
-                let mut scan = state.scan.lock().unwrap();
-                scan.processed_files += 1;
-                scan.processed_bytes += size;
-                if cached {
-                    scan.skipped_files += 1;
-                } else {
-                    scan.read_bytes += size;
-                    if result.authenticity == "likely_lossy" {
-                        scan.suspect_files += 1;
+            scan.processed_files += 1;
+            scan.processed_bytes += size;
+            if cached {
+                scan.skipped_files += 1;
+            } else {
+                scan.read_bytes += size;
+                if result.authenticity == "likely_lossy" {
+                    scan.suspect_files += 1;
+                    push_log(
+                        &mut scan,
+                        "warning",
+                        format!(
+                            "Likely lossy source: {relative} — {}",
+                            result.authenticity_message
+                        ),
+                    );
+                }
+                match result.verdict.as_str() {
+                    "healthy" => scan.verified_files += 1,
+                    "corrupt" => {
+                        scan.corrupt_files += 1;
+                        push_log(
+                            &mut scan,
+                            "error",
+                            format!("Corrupt: {relative} — {}", result.message),
+                        );
+                    }
+                    _ => {
+                        scan.error_files += 1;
                         push_log(
                             &mut scan,
                             "warning",
-                            format!(
-                                "Likely lossy source: {relative} — {}",
-                                result.authenticity_message
-                            ),
+                            format!("Could not verify: {relative} — {}", result.message),
                         );
-                    }
-                    match result.verdict.as_str() {
-                        "healthy" => scan.verified_files += 1,
-                        "corrupt" => {
-                            scan.corrupt_files += 1;
-                            push_log(
-                                &mut scan,
-                                "error",
-                                format!("Corrupt: {relative} — {}", result.message),
-                            );
-                        }
-                        _ => {
-                            scan.error_files += 1;
-                            push_log(
-                                &mut scan,
-                                "warning",
-                                format!("Could not verify: {relative} — {}", result.message),
-                            );
-                        }
                     }
                 }
             }
-            Err(err) => {
-                let mut scan = state.scan.lock().unwrap();
-                scan.processed_files += 1;
-                scan.processed_bytes += size;
-                scan.read_bytes += size;
-                scan.error_files += 1;
-                push_log(&mut scan, "warning", format!("{relative}: {err}"));
-            }
         }
-        publish_status(&state);
+        Err(err) => {
+            let mut scan = state.scan.lock().unwrap();
+            scan.processed_files += 1;
+            scan.processed_bytes += size;
+            scan.read_bytes += size;
+            scan.error_files += 1;
+            push_log(&mut scan, "warning", format!("{relative}: {err}"));
+        }
     }
-    finish_scan(&state, &connection, "completed");
+    publish_status(state);
 }
 
 fn discover_files(root: &Path) -> Result<Vec<(PathBuf, u64)>, String> {
@@ -679,7 +733,7 @@ fn verify_one(
     source: &str,
     force: bool,
 ) -> Result<(Validation, bool), String> {
-    let connection = Connection::open(db_path).map_err(|err| err.to_string())?;
+    let connection = open_db(db_path).map_err(|err| err.to_string())?;
     verify_one_with_connection(&connection, path, source, force)
 }
 
@@ -943,7 +997,7 @@ fn push_log(scan: &mut ScanStatus, level: &str, text: String) {
 }
 
 fn init_db(path: &Path) -> rusqlite::Result<()> {
-    let connection = Connection::open(path)?;
+    let connection = open_db(path)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS file_results (
@@ -976,7 +1030,17 @@ fn init_db(path: &Path) -> rusqlite::Result<()> {
             total_bytes INTEGER NOT NULL DEFAULT 0
          );",
     )?;
+    connection.execute(
+        "UPDATE scan_runs SET status='cancelled', finished_at=?1 WHERE status='running'",
+        [Utc::now().to_rfc3339()],
+    )?;
     Ok(())
+}
+
+fn open_db(path: &Path) -> rusqlite::Result<Connection> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(Duration::from_secs(30))?;
+    Ok(connection)
 }
 
 fn load_summary(path: &Path) -> Result<Summary, String> {
