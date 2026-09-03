@@ -31,7 +31,7 @@ The app runs in the homeserver's Dokploy Media stack. It reads `/srv/media/music
 - Manual incremental and forced full-library scans; no scheduled library scans.
 - Persistent per-file results keyed by path, size, high-resolution modification time, and validator version.
 - Strict FLAC validation plus decoder-based validation for supported non-FLAC audio.
-- Two bounded library workers by default to keep the HDD queue busy without excessive seek amplification; configurable from one to four.
+- Three bounded library workers by default, configurable from one to four. Integrity reads are serialized to keep a single HDD sequential while spectral analysis of cached files overlaps on the other workers.
 - Pause/cancel is safe and retains completed results.
 - Lidarr import validation is automatic and fail-closed.
 - No feature may modify, move, rename, repair, quarantine, or delete music.

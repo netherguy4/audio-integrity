@@ -239,9 +239,9 @@ async fn main() {
         scan: Arc::new(Mutex::new(ScanStatus::default())),
         cancel: Arc::new(AtomicBool::new(false)),
         events,
-        scan_workers: env_var("SCAN_WORKERS", "2")
+        scan_workers: env_var("SCAN_WORKERS", "3")
             .parse::<usize>()
-            .unwrap_or(2)
+            .unwrap_or(3)
             .clamp(1, 4),
     };
 
@@ -612,11 +612,13 @@ fn run_scan(state: AppState, mode: String) {
     publish_status(&state);
 
     let queue = Arc::new(Mutex::new(VecDeque::from(files)));
+    let disk_reader = Arc::new(Mutex::new(()));
     let worker_error = Arc::new(Mutex::new(None));
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let state = state.clone();
             let queue = Arc::clone(&queue);
+            let disk_reader = Arc::clone(&disk_reader);
             let worker_error = Arc::clone(&worker_error);
             let mode = mode.clone();
             scope.spawn(move || {
@@ -634,7 +636,14 @@ fn run_scan(state: AppState, mode: String) {
                     let Some((path, size)) = queue.lock().unwrap().pop_front() else {
                         return;
                     };
-                    process_scan_file(&state, &worker_connection, &path, size, mode == "full");
+                    process_scan_file(
+                        &state,
+                        &worker_connection,
+                        &path,
+                        size,
+                        mode == "full",
+                        &disk_reader,
+                    );
                 }
             });
         }
@@ -655,6 +664,7 @@ fn process_scan_file(
     path: &Path,
     size: u64,
     force: bool,
+    disk_reader: &Mutex<()>,
 ) {
     let relative = path
         .strip_prefix(&state.library_root)
@@ -667,7 +677,7 @@ fn process_scan_file(
         scan.current_validator = Some(validator_for(path).into());
     }
     publish_status(state);
-    match verify_one_with_connection(connection, path, "library", force) {
+    match verify_one_with_connection(connection, path, "library", force, Some(disk_reader)) {
         Ok((result, cached)) => {
             let mut scan = state.scan.lock().unwrap();
             scan.processed_files += 1;
@@ -743,7 +753,7 @@ fn verify_one(
     force: bool,
 ) -> Result<(Validation, bool), String> {
     let connection = open_db(db_path).map_err(|err| err.to_string())?;
-    verify_one_with_connection(&connection, path, source, force)
+    verify_one_with_connection(&connection, path, source, force, None)
 }
 
 fn verify_one_with_connection(
@@ -751,6 +761,7 @@ fn verify_one_with_connection(
     path: &Path,
     source: &str,
     force: bool,
+    disk_reader: Option<&Mutex<()>>,
 ) -> Result<(Validation, bool), String> {
     let metadata = path.metadata().map_err(|err| err.to_string())?;
     if !metadata.is_file() {
@@ -789,7 +800,7 @@ fn verify_one_with_connection(
         }
     }
     let format = extension(path).unwrap_or_else(|| "unknown".into());
-    let result = validate(path);
+    let result = validate(path, disk_reader);
     connection
         .execute(
             "INSERT INTO file_results
@@ -812,7 +823,9 @@ fn verify_one_with_connection(
     Ok((result, false))
 }
 
-fn validate(path: &Path) -> Validation {
+fn validate(path: &Path, disk_reader: Option<&Mutex<()>>) -> Validation {
+    let disk_guard =
+        disk_reader.map(|lock| lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     let start = Instant::now();
     let (validator, output) = if extension(path).as_deref() == Some("flac") {
         (
@@ -832,6 +845,7 @@ fn validate(path: &Path) -> Validation {
                 .output(),
         )
     };
+    drop(disk_guard);
     let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
     let mut result = match output {
         Err(err) => Validation {
