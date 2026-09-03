@@ -248,6 +248,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/styles.css", get(styles))
+        .route("/metrics.js", get(metrics_script))
         .route("/app.js", get(script))
         .route("/favicon.ico", get(favicon))
         .route("/healthz", get(health))
@@ -306,6 +307,13 @@ async fn styles() -> Response<Body> {
 async fn script() -> Response<Body> {
     asset(
         include_str!("../static/app.js"),
+        "text/javascript; charset=utf-8",
+    )
+}
+
+async fn metrics_script() -> Response<Body> {
+    asset(
+        include_str!("../static/metrics.js"),
         "text/javascript; charset=utf-8",
     )
 }

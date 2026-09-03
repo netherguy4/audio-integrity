@@ -1,8 +1,7 @@
 services:
   audio-integrity:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/netherguy4/audio-integrity:main
+    pull_policy: always
     restart: unless-stopped
     environment:
       ADMIN_USER: ${ADMIN_USER:-admin}
@@ -23,4 +22,3 @@ volumes:
 networks:
   dokploy-network:
     external: true
-

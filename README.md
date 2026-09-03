@@ -30,3 +30,15 @@ mise run check
 ```
 
 Run the container with a small read-only fixture directory mounted at `/music`; never point development scans at the production library.
+
+## Production deployment
+
+Production images are built by GitHub Actions and published to `ghcr.io/netherguy4/audio-integrity`. Dokploy only pulls the finished `main` image from `compose.yaml`; it does not compile the application on the production server.
+
+Create a protected GitHub environment named `production` and add these secrets:
+
+- `DOKPLOY_URL`: the base URL of the Dokploy instance, for example `https://dokploy.example.com`.
+- `DOKPLOY_API_TOKEN`: an API token created in the Dokploy profile settings.
+- `DOKPLOY_COMPOSE_ID`: the ID of the Audio Integrity Compose service.
+
+In Dokploy, keep this repository and `compose.yaml` configured as the Compose source, disable its push-triggered Auto Deploy, and configure the GHCR registry if the package is private. A push to `main` now deploys only after the `Check` workflow succeeds: the deploy workflow builds and publishes `main` plus an immutable `sha-…` tag, then calls Dokploy's `compose.deploy` API.

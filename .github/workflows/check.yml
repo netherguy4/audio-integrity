@@ -4,6 +4,12 @@ on:
     branches: [main]
   pull_request:
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --check static/app.js
+      - run: node --test static/metrics.test.js
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -24,4 +30,3 @@ jobs:
           context: .
           file: Dockerfile.plugin
           push: false
-
