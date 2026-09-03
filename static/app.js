@@ -7,16 +7,23 @@ const dictionary = {
   }
 };
 
-const state = { lang: localStorage.getItem('audio-integrity-lang') || (navigator.language.startsWith('ru') ? 'ru' : 'en'), socket:null, reconnectTimer:null, connectionKey:'connecting', lastCounters:null };
+const supplementaryCopy = {
+  ru: { running:'Идёт сейчас',previous:'Назад',next:'Вперёд',perPage:'На странице',paginationLabel:'Навигация по файлам' },
+  en: { running:'In progress',previous:'Previous',next:'Next',perPage:'Per page',paginationLabel:'File navigation' }
+};
+
+const savedPageSize = Number(localStorage.getItem('audio-integrity-page-size'));
+const state = { lang: localStorage.getItem('audio-integrity-lang') || (navigator.language.startsWith('ru') ? 'ru' : 'en'), socket:null, reconnectTimer:null, connectionKey:'connecting', lastCounters:null, scanStatus:null, historyRuns:[], resultsPage:0, resultsPageSize:[25,50,100].includes(savedPageSize) ? savedPageSize : 25, resultsRequestId:0 };
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
-const t = key => dictionary[state.lang][key] || key;
+const t = key => dictionary[state.lang][key] || supplementaryCopy[state.lang][key] || key;
 
 function applyLanguage() {
   document.documentElement.lang = state.lang;
   $('#language').value = state.lang;
   $$('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
   $$('[data-i18n-placeholder]').forEach(node => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  $('#results-pagination').setAttribute('aria-label', t('paginationLabel'));
   localStorage.setItem('audio-integrity-lang', state.lang);
   refreshAll();
 }
@@ -57,6 +64,8 @@ function formatBytes(value) {
   return `${(value / 1024 ** index).toLocaleString(state.lang, {maximumFractionDigits:index > 2 ? 2 : 1})} ${units[index]}`;
 }
 function formatDate(value) { return value ? new Intl.DateTimeFormat(state.lang, {dateStyle:'medium',timeStyle:'short'}).format(new Date(value)) : t('never'); }
+function formatRange(start, end, total) { return state.lang === 'ru' ? `${formatNumber(start)}–${formatNumber(end)} из ${formatNumber(total)} файлов` : `${formatNumber(start)}–${formatNumber(end)} of ${formatNumber(total)} files`; }
+function formatPage(page, total) { return state.lang === 'ru' ? `Страница ${formatNumber(page)} из ${formatNumber(total)}` : `Page ${formatNumber(page)} of ${formatNumber(total)}`; }
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
   if (seconds < 60) return `< 1 ${state.lang === 'ru' ? 'мин' : 'min'}`;
@@ -80,6 +89,7 @@ async function refreshStatus() {
 }
 
 function renderStatus(scan) {
+    state.scanStatus = scan;
     const running = ['discovering','scanning','cancelling'].includes(scan.phase);
     $('#phase').textContent = t(scan.phase);
     $('#phase-dot').className = `status-dot ${running ? 'running' : scan.phase === 'failed' ? 'failed' : scan.phase === 'completed' ? 'ok' : 'idle'}`;
@@ -113,6 +123,7 @@ function renderStatus(scan) {
       Promise.allSettled([refreshSummary(), refreshResults()]);
     }
     state.lastCounters = counters;
+    renderHistory(state.historyRuns);
     if (!running && ['completed','cancelled','failed'].includes(scan.phase)) refreshHistory();
 }
 
@@ -163,9 +174,17 @@ async function refreshSummary() {
 function badge(value, label = null) { return `<span class="badge ${escapeHtml(value)}">${escapeHtml(label || t(value))}</span>`; }
 
 async function refreshResults() {
-  const query = new URLSearchParams({verdict:$('#verdict-filter').value, query:$('#search').value, limit:'150'});
+  const requestId = ++state.resultsRequestId;
+  const query = new URLSearchParams({verdict:$('#verdict-filter').value, query:$('#search').value, limit:String(state.resultsPageSize), offset:String(state.resultsPage * state.resultsPageSize)});
   try {
-    const rows = await api(`/api/results?${query}`);
+    const page = await api(`/api/results?${query}`);
+    if (requestId !== state.resultsRequestId) return;
+    const totalPages = Math.max(1, Math.ceil(page.total / page.limit));
+    if (page.total && state.resultsPage >= totalPages) {
+      state.resultsPage = totalPages - 1;
+      return refreshResults();
+    }
+    const rows = page.items;
     $('#results-empty').hidden = rows.length > 0;
     $('#results-body').innerHTML = rows.map(row => `<tr>
       <td>${badge(row.verdict, t(`${row.verdict}Badge`))}</td>
@@ -174,19 +193,38 @@ async function refreshResults() {
       <td>${escapeHtml(row.format.toUpperCase())}<br><small class="muted">${formatBytes(row.size)}</small></td>
       <td>${escapeHtml(formatDate(row.checkedAt))}<br><small class="muted">${formatNumber(row.durationMs)} ms</small></td>
     </tr>`).join('');
+    $('#results-pagination').hidden = page.total === 0;
+    if (page.total) {
+      const start = page.offset + 1;
+      const end = Math.min(page.offset + rows.length, page.total);
+      $('#results-range').textContent = formatRange(start, end, page.total);
+      $('#results-page').textContent = formatPage(state.resultsPage + 1, totalPages);
+      $('#results-prev').disabled = state.resultsPage === 0;
+      $('#results-next').disabled = state.resultsPage + 1 >= totalPages;
+    }
   } catch {}
+}
+
+function renderHistory(rows) {
+  $('#history-list').innerHTML = rows.length ? rows.map(run => {
+      const live = run.status === 'running' && state.scanStatus?.runId === run.id ? state.scanStatus : null;
+      const totalFiles = live?.totalFiles ?? run.totalFiles;
+      const skippedFiles = live?.skippedFiles ?? run.skippedFiles;
+      const corruptFiles = live?.corruptFiles ?? run.corruptFiles;
+      return `<div class="history-row">
+      <span>${badge(run.status)}</span>
+      <span class="run-meta"><strong>${t(run.mode)}</strong><small>${formatDate(run.startedAt)}</small></span>
+      <span class="number"><strong>${formatNumber(totalFiles)}</strong><br><small>${t('files')}</small></span>
+      <span class="number"><strong>${formatNumber(skippedFiles)}</strong><br><small>${t('cached')}</small></span>
+      <span class="number"><strong>${formatNumber(corruptFiles)}</strong><br><small>${t('defects')}</small></span>
+    </div>`;
+  }).join('') : `<div class="history-empty">${t('noResultsLead')}</div>`;
 }
 
 async function refreshHistory() {
   try {
-    const rows = await api('/api/history');
-    $('#history-list').innerHTML = rows.length ? rows.map(run => `<div class="history-row">
-      <span>${badge(run.status)}</span>
-      <span class="run-meta"><strong>${t(run.mode)}</strong><small>${formatDate(run.startedAt)}</small></span>
-      <span class="number"><strong>${formatNumber(run.totalFiles)}</strong><br><small>${t('files')}</small></span>
-      <span class="number"><strong>${formatNumber(run.skippedFiles)}</strong><br><small>${t('cached')}</small></span>
-      <span class="number"><strong>${formatNumber(run.corruptFiles)}</strong><br><small>${t('defects')}</small></span>
-    </div>`).join('') : `<div class="history-empty">${t('noResultsLead')}</div>`;
+    state.historyRuns = await api('/api/history');
+    renderHistory(state.historyRuns);
   } catch {}
 }
 
@@ -210,8 +248,12 @@ $('#scan-full').addEventListener('click', () => { $('#full-confirm').hidden=fals
 $('#full-confirm-no').addEventListener('click', () => { $('#full-confirm').hidden=true; });
 $('#full-confirm-yes').addEventListener('click', () => startScan('full'));
 $('#scan-cancel').addEventListener('click', () => api('/api/scans/cancel',{method:'POST'}).then(refreshStatus).catch(()=>{}));
-$('#verdict-filter').addEventListener('change', refreshResults);
-$('#search').addEventListener('input', () => { clearTimeout(state.searchTimer); state.searchTimer=setTimeout(refreshResults,250); });
+$('#verdict-filter').addEventListener('change', () => { state.resultsPage=0; refreshResults(); });
+$('#search').addEventListener('input', () => { state.resultsPage=0; clearTimeout(state.searchTimer); state.searchTimer=setTimeout(refreshResults,250); });
+$('#results-prev').addEventListener('click', () => { if (state.resultsPage > 0) { state.resultsPage--; refreshResults(); } });
+$('#results-next').addEventListener('click', () => { state.resultsPage++; refreshResults(); });
+$('#results-page-size').value = String(state.resultsPageSize);
+$('#results-page-size').addEventListener('change', event => { state.resultsPageSize=Number(event.target.value); state.resultsPage=0; localStorage.setItem('audio-integrity-page-size', String(state.resultsPageSize)); refreshResults(); });
 $$('.nav-link[href]').forEach(link => link.addEventListener('click', () => { $$('.nav-link').forEach(item => item.classList.remove('active')); link.classList.add('active'); }));
 
 applyTheme(localStorage.getItem('audio-integrity-theme') || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light'));

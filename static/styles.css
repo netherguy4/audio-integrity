@@ -484,7 +484,7 @@ svg {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.73rem;
   font-variant-numeric: tabular-nums;
   margin-bottom: 7px;
 }
@@ -790,6 +790,22 @@ td.path-cell summary {
   color: var(--amber);
   background: var(--amber-soft);
 }
+.badge.running {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+.badge.completed {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.badge.failed {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.badge.cancelled {
+  color: var(--muted);
+  background: var(--panel-2);
+}
 .badge.unknown,
 .badge.not_applicable {
   color: var(--muted);
@@ -816,12 +832,48 @@ td.path-cell summary {
   font-size: 0.74rem;
   margin-top: 3px;
 }
+.pagination {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 13px 21px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.73rem;
+  font-variant-numeric: tabular-nums;
+}
+.pagination[hidden] {
+  display: none;
+}
+.page-size,
+.page-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.page-size select {
+  min-height: 34px;
+  padding: 6px 28px 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+}
+.page-controls .button {
+  min-height: 34px;
+  padding-block: 6px;
+}
+.page-controls > span {
+  min-width: 104px;
+  text-align: center;
+}
 .history-list {
   display: grid;
 }
 .history-row {
   display: grid;
-  grid-template-columns: 90px 1fr repeat(3, minmax(80px, auto));
+  grid-template-columns: minmax(155px, max-content) minmax(180px, 1fr) repeat(3, minmax(80px, 110px));
   gap: 18px;
   align-items: center;
   padding: 13px 21px;
@@ -1057,10 +1109,38 @@ footer code {
     display: none;
   }
   .history-row {
-    grid-template-columns: 75px 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+  .history-row .run-meta {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .history-row > span:first-child {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
   }
   .history-row .number {
     display: none;
+  }
+  .pagination {
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    padding: 13px 16px;
+  }
+  .pagination-range {
+    grid-column: 1;
+  }
+  .page-size {
+    grid-column: 2;
+  }
+  .page-size > span {
+    display: none;
+  }
+  .page-controls {
+    grid-column: 1/-1;
+    justify-content: space-between;
   }
   footer {
     display: block;

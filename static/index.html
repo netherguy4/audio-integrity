@@ -110,8 +110,17 @@
         <p class="auth-note" data-i18n="authNote">«Возможно пережат» означает, что спектральный анализ обнаружил признаки перекодирования из MP3/AAC. Это не означает, что файл повреждён.</p>
         <div class="table-wrap">
           <table><thead><tr><th data-i18n="state">Результат</th><th data-i18n="path">Файл</th><th data-i18n="authenticity">Качество источника</th><th data-i18n="format">Формат</th><th data-i18n="checked">Дата проверки</th></tr></thead><tbody id="results-body"></tbody></table>
-          <div id="results-empty" class="empty-state"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><strong data-i18n="noResults">Пока нет результатов</strong><span data-i18n="noResultsLead">Запустите первую проверку библиотеки.</span></div>
+          <div id="results-empty" class="empty-state"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><strong data-i18n="noResults">Ещё нет проверенных файлов</strong><span data-i18n="noResultsLead">Запустите проверку, чтобы увидеть состояние медиатеки.</span></div>
         </div>
+        <nav id="results-pagination" class="pagination" aria-label="Навигация по файлам" hidden>
+          <span id="results-range" class="pagination-range"></span>
+          <label class="page-size"><span data-i18n="perPage">На странице</span><select id="results-page-size"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+          <div class="page-controls">
+            <button id="results-prev" class="button secondary" type="button" data-i18n="previous">Назад</button>
+            <span id="results-page"></span>
+            <button id="results-next" class="button secondary" type="button" data-i18n="next">Вперёд</button>
+          </div>
+        </nav>
       </section>
 
       <section id="history" class="panel data-panel">

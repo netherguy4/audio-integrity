@@ -182,6 +182,15 @@ struct FileResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ResultsPage {
+    items: Vec<FileResult>,
+    total: u64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ScanRun {
     id: i64,
     mode: String,
@@ -1074,12 +1083,20 @@ fn load_summary(path: &Path) -> Result<Summary, String> {
     })
 }
 
-fn load_results(path: &Path, query: &ResultQuery) -> Result<Vec<FileResult>, String> {
+fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String> {
     let connection = Connection::open(path).map_err(|err| err.to_string())?;
     let verdict = query.verdict.as_deref().unwrap_or("all");
     let needle = format!("%{}%", query.query.as_deref().unwrap_or_default());
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let offset = query.offset.unwrap_or(0);
+    let total = connection
+        .query_row(
+            "SELECT COUNT(*) FROM file_results
+             WHERE (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'",
+            params![verdict, needle],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| err.to_string())? as u64;
     let mut statement = connection
         .prepare(
             "SELECT path, size, format, verdict, authenticity, checked_at, duration_ms, message, source FROM file_results
@@ -1103,8 +1120,15 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<Vec<FileResult>, Str
             })
         })
         .map_err(|err| err.to_string())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|err| err.to_string())
+    let items = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|err| err.to_string())?;
+    Ok(ResultsPage {
+        items,
+        total,
+        limit,
+        offset,
+    })
 }
 
 fn load_history(path: &Path) -> Result<Vec<ScanRun>, String> {
@@ -1167,6 +1191,7 @@ fn shorten(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn supported_extensions_are_case_insensitive() {
@@ -1179,5 +1204,46 @@ mod tests {
     fn shortens_long_messages() {
         assert_eq!(shorten("abcdef", 4), "abcd…");
         assert_eq!(shorten("abc", 4), "abc");
+    }
+
+    #[test]
+    fn results_include_filtered_total_and_requested_page() {
+        let database = std::env::temp_dir().join(format!(
+            "audio-integrity-pagination-{}-{}.db",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        init_db(&database).expect("database should initialize");
+        let connection = open_db(&database).expect("database should open");
+        for index in 0..3 {
+            connection
+                .execute(
+                    "INSERT INTO file_results
+                     (path, size, mtime_ns, validator_version, validator, format, verdict,
+                      authenticity, checked_at, duration_ms, message, source)
+                     VALUES (?1, 1, 1, 'test', 'flac', 'flac', 'corrupt', 'unknown',
+                             '2026-01-01T00:00:00Z', 1, 'test', 'library')",
+                    [format!("/music/{index}.flac")],
+                )
+                .expect("row should insert");
+        }
+        drop(connection);
+
+        let page = load_results(
+            &database,
+            &ResultQuery {
+                verdict: Some("corrupt".into()),
+                query: None,
+                limit: Some(1),
+                offset: Some(1),
+            },
+        )
+        .expect("page should load");
+
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.limit, 1);
+        assert_eq!(page.offset, 1);
+        fs::remove_file(database).expect("database should be removable");
     }
 }
