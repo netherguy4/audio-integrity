@@ -604,6 +604,10 @@ svg {
   border-top: 1px solid var(--border);
   font: 500 0.68rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+.event-log li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .event-log li:first-child {
   border-top: 0;
 }
@@ -1102,10 +1106,36 @@ footer code {
   .filters input {
     width: 100%;
   }
-  th:nth-child(4),
-  td:nth-child(4),
-  th:nth-child(5),
-  td:nth-child(5) {
+  .table-wrap {
+    overflow: visible;
+  }
+  table,
+  tbody {
+    display: block;
+  }
+  thead {
+    display: none;
+  }
+  tbody tr {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr:last-child {
+    border-bottom: 0;
+  }
+  tbody td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  tbody td.path-cell {
+    min-width: 0;
+    max-width: none;
+  }
+  tbody td:nth-child(n + 3) {
     display: none;
   }
   .history-row {
