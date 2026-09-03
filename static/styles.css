@@ -1118,8 +1118,8 @@ footer code {
   }
   tbody tr {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
     padding: 12px 14px;
     border-bottom: 1px solid var(--border);
   }
