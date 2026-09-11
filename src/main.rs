@@ -61,6 +61,7 @@ struct ScanStatus {
     processed_files: u64,
     verified_files: u64,
     skipped_files: u64,
+    removed_files: u64,
     corrupt_files: u64,
     suspect_files: u64,
     error_files: u64,
@@ -99,6 +100,7 @@ impl Default for ScanStatus {
             processed_files: 0,
             verified_files: 0,
             skipped_files: 0,
+            removed_files: 0,
             corrupt_files: 0,
             suspect_files: 0,
             error_files: 0,
@@ -627,7 +629,7 @@ fn run_scan(state: AppState, mode: String) {
     }
     publish_status(&state);
 
-    let queue = Arc::new(Mutex::new(VecDeque::from(files)));
+    let queue = Arc::new(Mutex::new(VecDeque::from(files.clone())));
     let disk_reader = Arc::new(Mutex::new(()));
     let worker_error = Arc::new(Mutex::new(None));
     std::thread::scope(|scope| {
@@ -670,8 +672,40 @@ fn run_scan(state: AppState, mode: String) {
     } else if state.cancel.load(Ordering::Relaxed) {
         finish_scan(&state, &connection, "cancelled");
     } else {
-        finish_scan(&state, &connection, "completed");
+        match reconcile_library(&connection, &files) {
+            Ok(removed) => {
+                let mut scan = state.scan.lock().unwrap();
+                scan.removed_files = removed as u64;
+                push_log(
+                    &mut scan,
+                    "info",
+                    format!("Removed {removed} absent library results"),
+                );
+                drop(scan);
+                finish_scan(&state, &connection, "completed");
+            }
+            Err(err) => fail_scan(&state, format!("library reconciliation: {err}")),
+        }
     }
+}
+
+fn reconcile_library(connection: &Connection, files: &[(PathBuf, u64)]) -> rusqlite::Result<usize> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch("CREATE TEMP TABLE current_library (path TEXT PRIMARY KEY)")?;
+    {
+        let mut insert = transaction.prepare("INSERT INTO current_library (path) VALUES (?1)")?;
+        for (path, _) in files {
+            insert.execute([path.to_string_lossy().as_ref()])?;
+        }
+    }
+    let removed = transaction.execute(
+        "DELETE FROM file_results WHERE source='library'
+         AND NOT EXISTS (SELECT 1 FROM current_library WHERE current_library.path=file_results.path)",
+        [],
+    )?;
+    transaction.execute_batch("DROP TABLE current_library")?;
+    transaction.commit()?;
+    Ok(removed)
 }
 
 fn process_scan_file(
@@ -795,23 +829,29 @@ fn verify_one_with_connection(
     if !force {
         let cached = connection
             .query_row(
-                "SELECT verdict, validator, message, duration_ms, authenticity, authenticity_message FROM file_results
+                "SELECT verdict, validator, message, duration_ms, authenticity, authenticity_message, source FROM file_results
                  WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3 AND validator_version = ?4",
                 params![path_text.as_ref(), size as i64, mtime_ns, VALIDATOR_VERSION],
                 |row| {
-                    Ok(Validation {
+                    Ok((Validation {
                         verdict: row.get(0)?,
                         validator: row.get(1)?,
                         message: row.get(2)?,
                         duration_ms: row.get::<_, i64>(3)? as u64,
                         authenticity: row.get(4)?,
                         authenticity_message: row.get(5)?,
-                    })
+                    }, row.get::<_, String>(6)?))
                 },
             )
             .optional()
             .map_err(|err| err.to_string())?;
-        if let Some(cached) = cached {
+        if let Some((cached, cached_source)) = cached {
+            if source == "library" && cached_source != "library" {
+                connection.execute(
+                    "UPDATE file_results SET source='library' WHERE path=?1 AND source!='library'",
+                    [path_text.as_ref()],
+                ).map_err(|err| err.to_string())?;
+            }
             return Ok((cached, true));
         }
     }
@@ -1002,19 +1042,28 @@ fn finish_scan(state: &AppState, connection: &Connection, status: &str) {
         )
     {
         error!(%err, "could not finalize scan run");
+        scan.phase = "failed".into();
+        scan.message = Some(format!("could not finalize scan run: {err}"));
     }
     drop(scan);
     publish_status(state);
 }
 
 fn fail_scan(state: &AppState, message: String) {
-    let mut scan = state.scan.lock().unwrap();
-    scan.phase = "failed".into();
-    scan.finished_at = Some(Utc::now());
-    scan.message = Some(message.clone());
-    push_log(&mut scan, "error", message);
-    drop(scan);
-    publish_status(state);
+    {
+        let mut scan = state.scan.lock().unwrap();
+        scan.phase = "failed".into();
+        scan.finished_at = Some(Utc::now());
+        scan.current_path = None;
+        scan.current_validator = None;
+        scan.message = Some(message.clone());
+        push_log(&mut scan, "error", message);
+    }
+    if let Ok(connection) = open_db(&state.db_path) {
+        finish_scan(state, &connection, "failed");
+    } else {
+        publish_status(state);
+    }
 }
 
 fn publish_status(state: &AppState) {
@@ -1088,7 +1137,7 @@ fn load_summary(path: &Path) -> Result<Summary, String> {
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(verdict='healthy'),0), COALESCE(SUM(verdict='corrupt'),0),
                     COALESCE(SUM(authenticity='likely_lossy'),0), COALESCE(SUM(verdict='error'),0),
-                    COALESCE(SUM(size),0) FROM file_results",
+                    COALESCE(SUM(size),0) FROM file_results WHERE source='library'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )
@@ -1122,7 +1171,7 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String>
     let total = connection
         .query_row(
             "SELECT COUNT(*) FROM file_results
-             WHERE (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'",
+             WHERE source='library' AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'",
             params![verdict, needle],
             |row| row.get::<_, i64>(0),
         )
@@ -1130,7 +1179,7 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String>
     let mut statement = connection
         .prepare(
             "SELECT path, size, format, verdict, authenticity, checked_at, duration_ms, message, source, mtime_ns, validator_version, authenticity_message FROM file_results
-             WHERE (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'
+             WHERE source='library' AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'
              ORDER BY CASE verdict WHEN 'corrupt' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, checked_at DESC
              LIMIT ?3 OFFSET ?4",
         )
@@ -1237,6 +1286,152 @@ fn shorten(value: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    struct Fixture {
+        root: PathBuf,
+        state: AppState,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "integrity-shrink-{}-{}",
+                std::process::id(),
+                Utc::now().timestamp_nanos_opt().unwrap()
+            ));
+            let library_root = root.join("music");
+            fs::create_dir_all(&library_root).unwrap();
+            let db_path = root.join("test.sqlite3");
+            init_db(&db_path).unwrap();
+            let (events, _) = broadcast::channel(256);
+            let state = AppState {
+                db_path,
+                library_root,
+                import_roots: vec![],
+                admin_user: "test".into(),
+                admin_password: "test".into(),
+                session_token: "test".into(),
+                lidarr_token: "test".into(),
+                api_token: None,
+                scan: Arc::new(Mutex::new(ScanStatus::default())),
+                cancel: Arc::new(AtomicBool::new(false)),
+                events,
+                scan_workers: 1,
+            };
+            Self { root, state }
+        }
+
+        fn cached_file(&self, name: &str, source: &str) -> PathBuf {
+            let path = self.state.library_root.join(name);
+            fs::write(&path, b"cached fixture; must never be decoded").unwrap();
+            let metadata = fs::metadata(&path).unwrap();
+            let mtime = metadata
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64;
+            open_db(&self.state.db_path).unwrap().execute(
+                "INSERT INTO file_results
+                 (path,size,mtime_ns,validator_version,validator,format,verdict,authenticity,checked_at,duration_ms,message,source)
+                 VALUES (?1,?2,?3,?4,'test','flac','healthy','likely_genuine','2026-01-01T00:00:00Z',1,'cached',?5)",
+                params![path.to_string_lossy(), metadata.len() as i64, mtime, VALIDATOR_VERSION, source],
+            ).unwrap();
+            path
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn shrinking_library_removes_missing_results_but_preserves_cache_and_history() {
+        let f = Fixture::new();
+        let kept = f.cached_file("kept.flac", "library");
+        let removed = f.cached_file("removed.flac", "library");
+        let staging = f.cached_file("staging.flac", "lidarr");
+        fs::remove_file(&staging).unwrap();
+        run_scan(f.state.clone(), "incremental".into());
+        assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 2);
+        fs::remove_file(removed).unwrap();
+        *f.state.scan.lock().unwrap() = ScanStatus::default();
+        run_scan(f.state.clone(), "incremental".into());
+        let status = f.state.scan.lock().unwrap();
+        assert_eq!(status.phase, "completed");
+        assert_eq!(status.total_files, 1);
+        assert_eq!(status.skipped_files, 1);
+        assert_eq!(status.read_bytes, 0);
+        assert_eq!(status.removed_files, 1);
+        assert_eq!(load_history(&f.state.db_path).unwrap().len(), 2);
+        let summary = load_summary(&f.state.db_path).unwrap();
+        assert_eq!(summary.known_files, 1);
+        assert_eq!(summary.checked_bytes, fs::metadata(&kept).unwrap().len());
+        let page = load_results(
+            &f.state.db_path,
+            &ResultQuery {
+                verdict: None,
+                query: None,
+                limit: None,
+                offset: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].path, kept.to_string_lossy());
+        assert_eq!(page.items[0].checked_at, "2026-01-01T00:00:00Z");
+        let imports: i64 = open_db(&f.state.db_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM file_results WHERE source='lidarr'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(imports, 1);
+    }
+
+    #[test]
+    fn empty_readable_library_clears_results_without_erasing_history() {
+        let f = Fixture::new();
+        fs::remove_file(f.cached_file("removed.flac", "library")).unwrap();
+        run_scan(f.state.clone(), "incremental".into());
+        let status = f.state.scan.lock().unwrap();
+        assert_eq!(status.phase, "completed");
+        assert_eq!(status.removed_files, 1);
+        assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 0);
+        assert_eq!(load_history(&f.state.db_path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failed_or_cancelled_inventory_does_not_remove_previous_results() {
+        for cancel in [false, true] {
+            let f = Fixture::new();
+            fs::remove_file(f.cached_file("removed.flac", "library")).unwrap();
+            if cancel {
+                f.state.cancel.store(true, Ordering::Relaxed);
+            } else {
+                fs::remove_dir(&f.state.library_root).unwrap();
+            }
+            run_scan(f.state.clone(), "incremental".into());
+            let expected = if cancel { "cancelled" } else { "failed" };
+            assert_eq!(f.state.scan.lock().unwrap().phase, expected);
+            assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 1);
+            assert_eq!(load_history(&f.state.db_path).unwrap()[0].status, expected);
+        }
+    }
+
+    #[test]
+    fn library_scan_promotes_import_cache_without_decoding_again() {
+        let f = Fixture::new();
+        f.cached_file("imported.flac", "lidarr");
+        assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 0);
+        run_scan(f.state.clone(), "incremental".into());
+        assert_eq!(f.state.scan.lock().unwrap().skipped_files, 1);
+        assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 1);
+    }
 
     #[test]
     fn supported_extensions_are_case_insensitive() {

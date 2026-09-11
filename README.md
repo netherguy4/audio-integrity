@@ -80,7 +80,12 @@ Poll `/api/status` until `phase` is `completed`; do not consume incomplete scans
 `GET /api/results?verdict=corrupt&limit=500&offset=0` supports pagination; use
 `verdict=likely_lossy` for authenticity suspects. Each result includes `mtimeNs`
 as a decimal string, `size`, `validatorVersion`, and `authenticityMessage`.
-Consumers must match path, size, nanosecond mtime and the current summary's
-validator version before acting. Deleted and replaced files may have historical
-rows in the database. `likely_lossy` remains a heuristic, and `error` is not a
+Summary and results describe the library only; Lidarr staging checks remain in
+an independent cache and do not inflate library counts. After a successful scan,
+results absent from its complete directory inventory are removed atomically.
+An empty, readable library clears its old results. A failed directory traversal
+or cancelled scan leaves the previous inventory intact. Scan history is retained.
+The status response reports `removedFiles` for the completed scan.
+Consumers must still match path, size, nanosecond mtime and the current summary's
+validator version before acting: files can change after the directory inventory. `likely_lossy` remains a heuristic, and `error` is not a
 corruption verdict. The service still mounts audio read-only and never deletes it.
