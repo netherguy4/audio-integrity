@@ -42,6 +42,7 @@ struct AppState {
     admin_password: Arc<str>,
     session_token: Arc<str>,
     lidarr_token: Arc<str>,
+    api_token: Option<Arc<str>>,
     scan: Arc<Mutex<ScanStatus>>,
     cancel: Arc<AtomicBool>,
     events: broadcast::Sender<RealtimeEvent>,
@@ -178,6 +179,9 @@ struct FileResult {
     duration_ms: u64,
     message: String,
     source: String,
+    mtime_ns: String,
+    validator_version: String,
+    authenticity_message: String,
 }
 
 #[derive(Serialize)]
@@ -236,6 +240,10 @@ async fn main() {
         admin_password: required_env("ADMIN_PASSWORD").into(),
         session_token: required_env("SESSION_TOKEN").into(),
         lidarr_token: required_env("LIDARR_TOKEN").into(),
+        api_token: env::var("API_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(Into::into),
         scan: Arc::new(Mutex::new(ScanStatus::default())),
         cancel: Arc::new(AtomicBool::new(false)),
         events,
@@ -1121,7 +1129,7 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String>
         .map_err(|err| err.to_string())? as u64;
     let mut statement = connection
         .prepare(
-            "SELECT path, size, format, verdict, authenticity, checked_at, duration_ms, message, source FROM file_results
+            "SELECT path, size, format, verdict, authenticity, checked_at, duration_ms, message, source, mtime_ns, validator_version, authenticity_message FROM file_results
              WHERE (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'
              ORDER BY CASE verdict WHEN 'corrupt' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, checked_at DESC
              LIMIT ?3 OFFSET ?4",
@@ -1139,6 +1147,9 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String>
                 duration_ms: row.get::<_, i64>(6)? as u64,
                 message: row.get(7)?,
                 source: row.get(8)?,
+                mtime_ns: row.get::<_, i64>(9)?.to_string(),
+                validator_version: row.get(10)?,
+                authenticity_message: row.get(11)?,
             })
         })
         .map_err(|err| err.to_string())?;
@@ -1181,6 +1192,18 @@ fn load_history(path: &Path) -> Result<Vec<ScanRun>, String> {
 }
 
 fn authorized(headers: &HeaderMap, state: &AppState) -> bool {
+    if headers
+        .get("x-integrity-token")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            state
+                .api_token
+                .as_ref()
+                .is_some_and(|token| secure_eq(value, token))
+        })
+    {
+        return true;
+    }
     headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
@@ -1266,6 +1289,10 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.limit, 1);
         assert_eq!(page.offset, 1);
+        let serialized = serde_json::to_value(&page.items[0]).unwrap();
+        assert_eq!(serialized["mtimeNs"], "1");
+        assert_eq!(serialized["validatorVersion"], "test");
+        assert!(serialized["authenticityMessage"].is_string());
         fs::remove_file(database).expect("database should be removable");
     }
 }

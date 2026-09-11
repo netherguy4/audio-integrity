@@ -7,6 +7,7 @@ services:
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
       SESSION_TOKEN: ${SESSION_TOKEN:?set SESSION_TOKEN}
+      API_TOKEN: ${API_TOKEN:-}
       LIDARR_TOKEN: ${LIDARR_TOKEN:?set LIDARR_TOKEN}
     volumes:
       - audio-integrity-data:/data

@@ -42,3 +42,21 @@ Create a protected GitHub environment named `production` and add these secrets:
 - `DOKPLOY_COMPOSE_ID`: the ID of the Audio Integrity Compose service.
 
 In Dokploy, keep this repository and `compose.yaml` configured as the Compose source, disable its push-triggered Auto Deploy, and configure the GHCR registry if the package is private. A push to `main` now deploys only after the `Check` workflow succeeds: the deploy workflow builds and publishes `main` plus an immutable `sha-…` tag, then calls Dokploy's `compose.deploy` API.
+
+## Automation API
+
+Set an optional, dedicated `API_TOKEN` and pass it in `x-integrity-token` to
+access `/api/summary`, `/api/status`, `/api/results`, `/api/history`, and scan
+start/cancel endpoints without a browser session. This token has scan-management
+access; the existing `LIDARR_TOKEN` remains limited to import verification.
+An empty or absent `API_TOKEN` disables token access to the management API.
+
+`POST /api/scans` accepts `{"mode":"incremental"}` or `{"mode":"full"}`.
+Poll `/api/status` until `phase` is `completed`; do not consume incomplete scans.
+`GET /api/results?verdict=corrupt&limit=500&offset=0` supports pagination; use
+`verdict=likely_lossy` for authenticity suspects. Each result includes `mtimeNs`
+as a decimal string, `size`, `validatorVersion`, and `authenticityMessage`.
+Consumers must match path, size, nanosecond mtime and the current summary's
+validator version before acting. Deleted and replaced files may have historical
+rows in the database. `likely_lossy` remains a heuristic, and `error` is not a
+corruption verdict. The service still mounts audio read-only and never deletes it.
