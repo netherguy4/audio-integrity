@@ -33,15 +33,39 @@ Run the container with a small read-only fixture directory mounted at `/music`; 
 
 ## Production deployment
 
-Production images are built by GitHub Actions and published to `ghcr.io/netherguy4/audio-integrity`. Dokploy only pulls the finished `main` image from `compose.yaml`; it does not compile the application on the production server.
+Production runs as a single **Application** in Dokploy, connected to this GitHub
+repository on `main`. Enable **Auto Deploy**, select the **Dockerfile** build type,
+set `Dockerfile` and context `.`, and use container port `8080`. Dokploy receives
+GitHub push events and builds/deploys the application itself. GitHub Actions runs
+checks only; no Dokploy API token or deployment secrets are needed in GitHub.
+Native push deployment runs independently of the `Check` workflow.
 
-Create a protected GitHub environment named `production` and add these secrets:
+Keep one replica on the host containing the media and database volumes. Set both
+update and rollback order to `stop-first`, because replicas must not concurrently
+manage scans against the same SQLite database. Attach `dokploy-network` with the
+network alias `audio-integrity` for Lidarr and media-maintenance clients. Configure
+`https://integrity.nether.pp.ua` in Dokploy Domains with port `8080`.
 
-- `DOKPLOY_URL`: the base URL of the Dokploy instance, for example `https://dokploy.example.com`.
-- `DOKPLOY_API_TOKEN`: an API token created in the Dokploy profile settings.
-- `DOKPLOY_COMPOSE_ID`: the ID of the Audio Integrity Compose service.
+Set the environment variables above, plus `API_TOKEN` for maintenance access.
+Mount the existing `media-audio-integrity-4iyid0_audio-integrity-data` volume at
+`/data`; it contains the scan history and cached evidence.
 
-In Dokploy, keep this repository and `compose.yaml` configured as the Compose source, disable its push-triggered Auto Deploy, and configure the GHCR registry if the package is private. A push to `main` now deploys only after the `Check` workflow succeeds: the deploy workflow builds and publishes `main` plus an immutable `sha-…` tag, then calls Dokploy's `compose.deploy` API.
+Dokploy 0.30.6 Application mounts do not expose a read-only option. Use local-driver
+volumes whose underlying bind mounts are read-only, then add them as volume mounts
+in the Application. Run once on the media host:
+
+```sh
+docker volume create --driver local --opt type=none --opt o=bind,ro \
+  --opt device=/srv/media/music audio-integrity-music-ro
+docker volume create --driver local --opt type=none --opt o=bind,ro \
+  --opt device=/srv/media/downloads audio-integrity-downloads-ro
+docker volume create --driver local --opt type=none --opt o=bind,ro \
+  --opt device=/srv/media/import/lidarr-manual audio-integrity-manual-import-ro
+```
+
+Mount these at `/music`, `/downloads`, and `/manual-import`, respectively. Keep
+placement pinned to `node.hostname==homelab`; these volumes reference local paths.
+The named volumes preserve read-only enforcement across native redeployments.
 
 ## Automation API
 
