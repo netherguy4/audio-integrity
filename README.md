@@ -33,39 +33,66 @@ Run the container with a small read-only fixture directory mounted at `/music`; 
 
 ## Production deployment
 
-Production runs as a single **Application** in Dokploy, connected to this GitHub
-repository on `main`. Enable **Auto Deploy**, select the **Dockerfile** build type,
-set `Dockerfile` and context `.`, and use container port `8080`. Dokploy receives
-GitHub push events and builds/deploys the application itself. GitHub Actions runs
-checks only; no Dokploy API token or deployment secrets are needed in GitHub.
-Native push deployment runs independently of the `Check` workflow.
+The following is a generic Dokploy deployment example, not a description of a
+specific installation. Keep actual domains, hostnames, volume names, host paths
+and credentials in your deployment settings or a private operations runbook.
+
+Create a single **Application** in Dokploy, connect your repository and deployment
+branch, select the **Dockerfile** build type, set `Dockerfile` and context `.`,
+and use container port `8080`. Enable **Auto Deploy** when pushes to that branch
+should trigger a deployment. GitHub Actions runs checks only; no Dokploy API token
+or deployment secrets are needed in GitHub for this setup. Native push deployment
+runs independently of the `Check` workflow.
 
 Keep one replica on the host containing the media and database volumes. Set both
 update and rollback order to `stop-first`, because replicas must not concurrently
-manage scans against the same SQLite database. Attach `dokploy-network` with the
-network alias `audio-integrity` for Lidarr and media-maintenance clients. Configure
-`https://integrity.nether.pp.ua` in Dokploy Domains with port `8080`.
+manage scans against the same SQLite database. Attach the shared Docker network
+used by your deployment, with a stable service alias such as `audio-integrity`
+for Lidarr and other internal clients. Configure your HTTPS domain in Dokploy
+Domains with port `8080`; `https://integrity.example.com` is an example only.
 
-Set the environment variables above, plus `API_TOKEN` for maintenance access.
-Mount the existing `media-audio-integrity-4iyid0_audio-integrity-data` volume at
-`/data`; it contains the scan history and cached evidence.
+Set the environment variables above, plus an optional, dedicated `API_TOKEN` for
+maintenance access. Mount your persistent data volume at `/data`; it contains
+the scan history and cached evidence. **For an existing installation, reuse its
+original data volume. Do not replace, rename or delete it to match an example.**
 
-Dokploy 0.30.6 Application mounts do not expose a read-only option. Use local-driver
+Media, downloads and manual-import directories must remain read-only. If your
+Dokploy Application mount UI does not expose a read-only option, use local-driver
 volumes whose underlying bind mounts are read-only, then add them as volume mounts
-in the Application. Run once on the media host:
+in the Application. Set `MUSIC_HOST_PATH`, `DOWNLOADS_HOST_PATH` and
+`IMPORT_HOST_PATH` to existing absolute directories on the selected media host
+before running the example below. The `example-integrity-*` volume names are
+illustrative; choose unused names for a new installation and retain the configured
+names for an existing one.
 
 ```sh
+: "${MUSIC_HOST_PATH:?Set the absolute path to your existing music directory}"
+: "${DOWNLOADS_HOST_PATH:?Set the absolute path to your existing downloads directory}"
+: "${IMPORT_HOST_PATH:?Set the absolute path to your existing manual-import directory}"
+
+for source in "$MUSIC_HOST_PATH" "$DOWNLOADS_HOST_PATH" "$IMPORT_HOST_PATH"; do
+  case "$source" in
+    /*) ;;
+    *) printf '%s\n' 'Each source must be an absolute path.' >&2; exit 1 ;;
+  esac
+  [ -d "$source" ] || { printf '%s\n' 'Each source directory must already exist.' >&2; exit 1; }
+done
+
 docker volume create --driver local --opt type=none --opt o=bind,ro \
-  --opt device=/srv/media/music audio-integrity-music-ro
+  --opt device="$MUSIC_HOST_PATH" example-integrity-music-ro
 docker volume create --driver local --opt type=none --opt o=bind,ro \
-  --opt device=/srv/media/downloads audio-integrity-downloads-ro
+  --opt device="$DOWNLOADS_HOST_PATH" example-integrity-downloads-ro
 docker volume create --driver local --opt type=none --opt o=bind,ro \
-  --opt device=/srv/media/import/lidarr-manual audio-integrity-manual-import-ro
+  --opt device="$IMPORT_HOST_PATH" example-integrity-manual-import-ro
 ```
 
-Mount these at `/music`, `/downloads`, and `/manual-import`, respectively. Keep
-placement pinned to `node.hostname==homelab`; these volumes reference local paths.
-The named volumes preserve read-only enforcement across native redeployments.
+Mount these at `/music`, `/downloads`, and `/manual-import`, respectively. Pin
+placement to the host holding the source directories, using a constraint such as
+`node.hostname==<media-hostname>` with your actual hostname substituted. These
+volumes reference local paths and must not be scheduled on an unrelated node.
+Verify read-only enforcement before scanning and after changing mount settings.
+This example does not require moving any existing data or changing application
+paths inside the container.
 
 ## Automation API
 
