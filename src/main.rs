@@ -482,6 +482,7 @@ async fn start_scan(
         if scan.phase == "discovering" || scan.phase == "scanning" || scan.phase == "cancelling" {
             return (StatusCode::CONFLICT, "a scan is already running").into_response();
         }
+        state.cancel.store(false, Ordering::Relaxed);
         *scan = ScanStatus {
             phase: "discovering".into(),
             mode: Some(body.mode.clone()),
@@ -491,7 +492,6 @@ async fn start_scan(
         push_log(&mut scan, "info", format!("{} scan started", body.mode));
     }
     publish_status(&state);
-    state.cancel.store(false, Ordering::Relaxed);
     let worker_state = state.clone();
     let mode = body.mode;
     std::thread::Builder::new()
@@ -597,7 +597,7 @@ fn run_scan(state: AppState, mode: String) {
     state.scan.lock().unwrap().run_id = Some(run_id);
     publish_status(&state);
 
-    let files = discover_files(&state.library_root);
+    let files = discover_files(&state.library_root, &state.cancel);
     let (files, total_bytes) = match files {
         Ok(files) => {
             let total_bytes = files.iter().map(|(_, size)| size).sum();
@@ -607,6 +607,11 @@ fn run_scan(state: AppState, mode: String) {
     };
     {
         let mut scan = state.scan.lock().unwrap();
+        // Checked under the scan lock so a cancel request cannot be overwritten by "scanning".
+        if state.cancel.load(Ordering::Relaxed) {
+            drop(scan);
+            return finish_scan(&state, &connection, "cancelled");
+        }
         scan.phase = "scanning".into();
         scan.total_files = files.len() as u64;
         scan.total_bytes = total_bytes;
@@ -780,12 +785,15 @@ fn process_scan_file(
     publish_status(state);
 }
 
-fn discover_files(root: &Path) -> Result<Vec<(PathBuf, u64)>, String> {
+fn discover_files(root: &Path, cancel: &AtomicBool) -> Result<Vec<(PathBuf, u64)>, String> {
     if !root.is_dir() {
         return Err(format!("library root is not readable: {}", root.display()));
     }
     let mut files = Vec::new();
     for entry in WalkDir::new(root).follow_links(false) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let entry = entry.map_err(|err| err.to_string())?;
         if entry.file_type().is_file() && supported(entry.path()) {
             let size = entry.metadata().map_err(|err| err.to_string())?.len();
@@ -1412,6 +1420,12 @@ mod tests {
             fs::remove_file(f.cached_file("removed.flac", "library")).unwrap();
             if cancel {
                 f.state.cancel.store(true, Ordering::Relaxed);
+                fs::write(f.state.library_root.join("present.flac"), b"x").unwrap();
+                assert!(
+                    discover_files(&f.state.library_root, &f.state.cancel)
+                        .unwrap()
+                        .is_empty()
+                );
             } else {
                 fs::remove_dir(&f.state.library_root).unwrap();
             }
