@@ -30,7 +30,7 @@ use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::{error, info};
 use walkdir::WalkDir;
 
-const VALIDATOR_VERSION: &str = "flac-reference-v1|ffmpeg-errors-v1";
+const VALIDATOR_VERSION: &str = "flac-reference-v1|ffmpeg-errors-v1|lossprint1.1-model1.0";
 const COOKIE_NAME: &str = "audio_integrity_session";
 
 #[derive(Clone)]
@@ -554,13 +554,21 @@ async fn verify_import(
         }
     };
     let db_path = state.db_path.clone();
+    let gate_path = path.clone();
     match tokio::task::spawn_blocking(move || verify_one(&db_path, &path, "lidarr", false)).await {
         Ok(Ok((result, cached))) => {
-            let accepted = result.verdict == "healthy";
+            let accepted = import_accepted(&result, &gate_path);
             let status = if accepted {
                 StatusCode::OK
             } else {
                 StatusCode::UNPROCESSABLE_ENTITY
+            };
+            // Surface the authenticity finding as the rejection reason so the
+            // plugin and retry classifier can tell lossy apart from unknown.
+            let message = if accepted || result.verdict != "healthy" {
+                result.message.clone()
+            } else {
+                result.authenticity_message.clone()
             };
             (
                 status,
@@ -571,7 +579,7 @@ async fn verify_import(
                     validator: result.validator,
                     authenticity: result.authenticity,
                     authenticity_message: result.authenticity_message,
-                    message: result.message,
+                    message,
                 }),
             )
                 .into_response()
@@ -958,21 +966,62 @@ fn validate(path: &Path, disk_reader: Option<&Mutex<()>>) -> Validation {
         }
     };
     if result.verdict == "healthy" && extension(path).as_deref() == Some("flac") {
-        match Command::new("isflac").arg(path).output() {
-            Ok(output) if output.status.code() == Some(0) => {
-                result.authenticity = "likely_genuine".into();
-                result.authenticity_message =
-                    shorten(String::from_utf8_lossy(&output.stdout).trim(), 1000);
-            }
-            Ok(output) if output.status.code() == Some(2) => {
-                result.authenticity = "likely_lossy".into();
-                result.authenticity_message =
-                    shorten(String::from_utf8_lossy(&output.stdout).trim(), 1000);
-            }
+        // Lossprint 1.1 (pinned CLI, threshold 0.5) replaces the isflac heuristic.
+        match Command::new("lossprint")
+            .args(["-o", "jsonl", "--jobs", "1", "--"])
+            .arg(path)
+            .output()
+        {
             Ok(output) => {
-                result.authenticity = "unknown".into();
-                result.authenticity_message =
-                    shorten(String::from_utf8_lossy(&output.stderr).trim(), 1000);
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                if !output.status.success() {
+                    result.authenticity = "unknown".into();
+                    result.authenticity_message = shorten(
+                        &format!(
+                            "Lossprint 1.1 could not analyze this file: {}",
+                            if stderr.is_empty() {
+                                "analyzer rejected file"
+                            } else {
+                                &stderr
+                            }
+                        ),
+                        1000,
+                    );
+                } else {
+                    match parse_lossprint_output(&String::from_utf8_lossy(&output.stdout), path) {
+                        Ok(assessment) => {
+                            let mut detail = format!("P(transcode)={:.2}", assessment.probability);
+                            if let Some(encoder) = assessment.encoder.as_deref() {
+                                detail.push_str(&format!(", likely source {encoder}"));
+                                if let Some(bitrate) = assessment.bitrate_kbps {
+                                    detail.push_str(&format!(" {bitrate} kbps"));
+                                }
+                            }
+                            if assessment.clean {
+                                result.authenticity = "likely_genuine".into();
+                                result.authenticity_message = shorten(
+                                    &format!("Lossprint 1.1 clean ({detail}): appears lossless"),
+                                    1000,
+                                );
+                            } else {
+                                result.authenticity = "likely_lossy".into();
+                                result.authenticity_message = shorten(
+                                    &format!(
+                                        "Lossprint 1.1 transcode ({detail}): likely encoded from a lossy source"
+                                    ),
+                                    1000,
+                                );
+                            }
+                        }
+                        Err(detail) => {
+                            result.authenticity = "unknown".into();
+                            result.authenticity_message = shorten(
+                                &format!("Lossprint 1.1 returned an unusable result: {detail}"),
+                                1000,
+                            );
+                        }
+                    }
+                }
             }
             Err(err) => {
                 result.authenticity = "unknown".into();
@@ -981,6 +1030,84 @@ fn validate(path: &Path, disk_reader: Option<&Mutex<()>>) -> Validation {
         }
     }
     result
+}
+
+/// Pinned Lossprint 1.1 assessment after strict validation of its JSONL output.
+struct LossprintAssessment {
+    probability: f64,
+    clean: bool,
+    encoder: Option<String>,
+    bitrate_kbps: Option<f64>,
+}
+
+/// Published Lossprint 1.1 decision threshold: P(transcode) >= 0.5 is a transcode.
+const LOSSPRINT_TRANSCODE_THRESHOLD: f64 = 0.5;
+
+fn parse_lossprint_output(
+    stdout: &str,
+    expected_path: &Path,
+) -> Result<LossprintAssessment, String> {
+    /// A single Lossprint `-o jsonl` result line. Unknown fields are ignored.
+    #[derive(Deserialize)]
+    struct LossprintRecord {
+        #[serde(default)]
+        transcode_probability: Option<f64>,
+        #[serde(default)]
+        verdict: Option<String>,
+        path: String,
+        #[serde(default)]
+        encoder: Option<String>,
+        #[serde(default)]
+        bitrate_kbps: Option<f64>,
+    }
+
+    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+    let (first, second) = (lines.next(), lines.next());
+    let Some(line) = first.filter(|_| second.is_none()) else {
+        return Err("expected exactly one JSON result".into());
+    };
+    let record: LossprintRecord =
+        serde_json::from_str(line).map_err(|err| format!("unparseable result: {err}"))?;
+    let probability = record.transcode_probability.unwrap_or(f64::NAN);
+    if !(0.0..=1.0).contains(&probability) {
+        return Err(format!(
+            "transcode_probability {probability} is not finite within [0, 1]"
+        ));
+    }
+    let expected_verdict = if probability < LOSSPRINT_TRANSCODE_THRESHOLD {
+        "clean"
+    } else {
+        "transcode"
+    };
+    if record.verdict.as_deref() != Some(expected_verdict) {
+        return Err(format!(
+            "verdict {:?} does not match P(transcode)={probability} at threshold {LOSSPRINT_TRANSCODE_THRESHOLD}",
+            record.verdict
+        ));
+    }
+    if Path::new(&record.path) != expected_path {
+        return Err(format!("result is for a different file: {}", record.path));
+    }
+    Ok(LossprintAssessment {
+        probability,
+        clean: expected_verdict == "clean",
+        encoder: record.encoder,
+        bitrate_kbps: record.bitrate_kbps,
+    })
+}
+
+/// Import gate: only structurally healthy files are accepted, and a FLAC is
+/// accepted only when Lossprint positively reports a genuine lossless source.
+/// Unknown FLAC authenticity must never pass.
+fn import_accepted(result: &Validation, path: &Path) -> bool {
+    if result.verdict != "healthy" {
+        return false;
+    }
+    if extension(path).as_deref() == Some("flac") {
+        result.authenticity == "likely_genuine"
+    } else {
+        true
+    }
 }
 
 fn validator_for(path: &Path) -> &'static str {
@@ -1141,12 +1268,14 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
 
 fn load_summary(path: &Path) -> Result<Summary, String> {
     let connection = Connection::open(path).map_err(|err| err.to_string())?;
+    // Only the current validator version counts: cached authenticity from an
+    // older analyzer must never read as current.
     let (known, healthy, corrupt, suspects, errors, bytes): (i64, i64, i64, i64, i64, i64) = connection
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(verdict='healthy'),0), COALESCE(SUM(verdict='corrupt'),0),
                     COALESCE(SUM(authenticity='likely_lossy'),0), COALESCE(SUM(verdict='error'),0),
-                    COALESCE(SUM(size),0) FROM file_results WHERE source='library'",
-            [],
+                    COALESCE(SUM(size),0) FROM file_results WHERE source='library' AND validator_version = ?1",
+            [VALIDATOR_VERSION],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )
         .map_err(|err| err.to_string())?;
@@ -1179,36 +1308,39 @@ fn load_results(path: &Path, query: &ResultQuery) -> Result<ResultsPage, String>
     let total = connection
         .query_row(
             "SELECT COUNT(*) FROM file_results
-             WHERE source='library' AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'",
-            params![verdict, needle],
+             WHERE source='library' AND validator_version = ?3 AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'",
+            params![verdict, needle, VALIDATOR_VERSION],
             |row| row.get::<_, i64>(0),
         )
         .map_err(|err| err.to_string())? as u64;
     let mut statement = connection
         .prepare(
             "SELECT path, size, format, verdict, authenticity, checked_at, duration_ms, message, source, mtime_ns, validator_version, authenticity_message FROM file_results
-             WHERE source='library' AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'
+             WHERE source='library' AND validator_version = ?5 AND (?1='all' OR verdict=?1 OR authenticity=?1) AND path LIKE ?2 ESCAPE '\\'
              ORDER BY CASE verdict WHEN 'corrupt' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, checked_at DESC
              LIMIT ?3 OFFSET ?4",
         )
         .map_err(|err| err.to_string())?;
     let rows = statement
-        .query_map(params![verdict, needle, limit, offset], |row| {
-            Ok(FileResult {
-                path: row.get(0)?,
-                size: row.get::<_, i64>(1)? as u64,
-                format: row.get(2)?,
-                verdict: row.get(3)?,
-                authenticity: row.get(4)?,
-                checked_at: row.get(5)?,
-                duration_ms: row.get::<_, i64>(6)? as u64,
-                message: row.get(7)?,
-                source: row.get(8)?,
-                mtime_ns: row.get::<_, i64>(9)?.to_string(),
-                validator_version: row.get(10)?,
-                authenticity_message: row.get(11)?,
-            })
-        })
+        .query_map(
+            params![verdict, needle, limit, offset, VALIDATOR_VERSION],
+            |row| {
+                Ok(FileResult {
+                    path: row.get(0)?,
+                    size: row.get::<_, i64>(1)? as u64,
+                    format: row.get(2)?,
+                    verdict: row.get(3)?,
+                    authenticity: row.get(4)?,
+                    checked_at: row.get(5)?,
+                    duration_ms: row.get::<_, i64>(6)? as u64,
+                    message: row.get(7)?,
+                    source: row.get(8)?,
+                    mtime_ns: row.get::<_, i64>(9)?.to_string(),
+                    validator_version: row.get(10)?,
+                    authenticity_message: row.get(11)?,
+                })
+            },
+        )
         .map_err(|err| err.to_string())?;
     let items = rows
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -1475,9 +1607,9 @@ mod tests {
                     "INSERT INTO file_results
                      (path, size, mtime_ns, validator_version, validator, format, verdict,
                       authenticity, checked_at, duration_ms, message, source)
-                     VALUES (?1, 1, 1, 'test', 'flac', 'flac', 'corrupt', 'unknown',
+                     VALUES (?1, 1, 1, ?2, 'flac', 'flac', 'corrupt', 'unknown',
                              '2026-01-01T00:00:00Z', 1, 'test', 'library')",
-                    [format!("/music/{index}.flac")],
+                    params![format!("/music/{index}.flac"), VALIDATOR_VERSION],
                 )
                 .expect("row should insert");
         }
@@ -1500,8 +1632,228 @@ mod tests {
         assert_eq!(page.offset, 1);
         let serialized = serde_json::to_value(&page.items[0]).unwrap();
         assert_eq!(serialized["mtimeNs"], "1");
-        assert_eq!(serialized["validatorVersion"], "test");
+        assert_eq!(serialized["validatorVersion"], VALIDATOR_VERSION);
         assert!(serialized["authenticityMessage"].is_string());
         fs::remove_file(database).expect("database should be removable");
+    }
+
+    fn lossprint_fixture(probability: &str, verdict: &str, path: &str) -> String {
+        format!(
+            "{{\"transcode_probability\":{probability},\"verdict\":\"{verdict}\",\
+             \"encoder\":null,\"bitrate_kbps\":null,\"path\":\"{path}\"}}"
+        )
+    }
+
+    #[test]
+    fn lossprint_clean_result_parses_and_reports_genuine_path() {
+        let assessment = parse_lossprint_output(
+            &lossprint_fixture("0.41", "clean", "/music/a.flac"),
+            Path::new("/music/a.flac"),
+        )
+        .expect("clean result should parse");
+        assert!(assessment.clean);
+        assert!((assessment.probability - 0.41).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lossprint_transcode_at_threshold_parses() {
+        // Published rule: P(transcode) at or above 0.5 is a transcode.
+        let assessment = parse_lossprint_output(
+            &lossprint_fixture("0.5", "transcode", "/music/a.flac"),
+            Path::new("/music/a.flac"),
+        )
+        .expect("threshold result should parse");
+        assert!(!assessment.clean);
+    }
+
+    #[test]
+    fn lossprint_malformed_results_are_rejected() {
+        let clean = lossprint_fixture("0.1", "clean", "/music/a.flac");
+        let cases = [
+            String::new(),
+            format!("{clean}\n{clean}"),
+            "not json".into(),
+            lossprint_fixture("0.9", "clean", "/music/a.flac"),
+            lossprint_fixture("0.1", "transcode", "/music/a.flac"),
+            lossprint_fixture("1.5", "transcode", "/music/a.flac"),
+            lossprint_fixture("NaN", "clean", "/music/a.flac"),
+            lossprint_fixture("0.1", "clean", "/music/other.flac"),
+            r#"{"verdict":"clean","path":"/music/a.flac"}"#.into(),
+            r#"{"transcode_probability":0.1,"verdict":"clean"}"#.into(),
+            r#"{"transcode_probability":0.1,"verdict":"maybe","path":"/music/a.flac"}"#.into(),
+        ];
+        for (index, case) in cases.iter().enumerate() {
+            assert!(
+                parse_lossprint_output(case, Path::new("/music/a.flac")).is_err(),
+                "case {index} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn import_gate_accepts_only_genuine_flac_and_healthy_others() {
+        let healthy = |authenticity: &str| Validation {
+            verdict: "healthy".into(),
+            validator: "test".into(),
+            authenticity: authenticity.into(),
+            authenticity_message: "test".into(),
+            message: "test".into(),
+            duration_ms: 1,
+        };
+        assert!(import_accepted(
+            &healthy("likely_genuine"),
+            Path::new("/staging/a.flac")
+        ));
+        assert!(!import_accepted(
+            &healthy("likely_lossy"),
+            Path::new("/staging/a.flac")
+        ));
+        assert!(!import_accepted(
+            &healthy("unknown"),
+            Path::new("/staging/a.flac")
+        ));
+        assert!(!import_accepted(
+            &healthy("pending"),
+            Path::new("/staging/a.flac")
+        ));
+        let mut corrupt = healthy("likely_genuine");
+        corrupt.verdict = "corrupt".into();
+        assert!(!import_accepted(&corrupt, Path::new("/staging/a.flac")));
+        // Non-FLAC behavior is unchanged: structural health decides.
+        assert!(import_accepted(
+            &healthy("not_applicable"),
+            Path::new("/staging/a.mp3")
+        ));
+        let mut bad_mp3 = healthy("not_applicable");
+        bad_mp3.verdict = "corrupt".into();
+        assert!(!import_accepted(&bad_mp3, Path::new("/staging/a.mp3")));
+    }
+
+    #[test]
+    fn stale_validator_version_is_neither_reused_nor_shown() {
+        let f = Fixture::new();
+        let path = f.state.library_root.join("stale.flac");
+        fs::write(&path, b"changed bytes; the old verdict must not be trusted").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let mtime = metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+        open_db(&f.state.db_path).unwrap().execute(
+            "INSERT INTO file_results
+             (path,size,mtime_ns,validator_version,validator,format,verdict,authenticity,checked_at,duration_ms,message,source)
+             VALUES (?1,?2,?3,'flac-reference-v1|ffmpeg-errors-v1','flac --test','flac','healthy','likely_genuine','2026-01-01T00:00:00Z',1,'stale', 'library')",
+            params![path.to_string_lossy(), metadata.len() as i64, mtime],
+        ).unwrap();
+        // Old-version authenticity must not read as current.
+        assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 0);
+        let page = load_results(
+            &f.state.db_path,
+            &ResultQuery {
+                verdict: None,
+                query: None,
+                limit: None,
+                offset: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 0);
+        // And the stale row must not satisfy the cache: the file is rechecked
+        // under the current version (no flac/lossprint binary here only changes
+        // the resulting verdict, not the reclassification itself).
+        let (result, cached) = verify_one_with_connection(
+            &open_db(&f.state.db_path).unwrap(),
+            &path,
+            "library",
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(!cached);
+        let stored: String = open_db(&f.state.db_path)
+            .unwrap()
+            .query_row(
+                "SELECT validator_version FROM file_results WHERE path = ?1",
+                [path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, VALIDATOR_VERSION);
+        assert_eq!(result.validator, "flac --test");
+    }
+
+    #[test]
+    fn lossprint_cli_end_to_end_when_available() {
+        let lossprint = std::env::var("LOSSPRINT_BIN").unwrap_or_else(|_| "lossprint".into());
+        if Command::new(&lossprint).arg("--version").output().is_err() {
+            eprintln!("skipping: lossprint binary not available");
+            return;
+        }
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            eprintln!("skipping: ffmpeg not available to build fixtures");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "integrity-lossprint-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let clean = dir.join("clean.flac");
+        let transcode = dir.join("transcode.flac");
+        let synth = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=440:duration=5")
+            .args(["-c:a", "flac"])
+            .arg(&clean)
+            .output()
+            .expect("ffmpeg should synthesize a clean FLAC");
+        assert!(synth.status.success());
+        let rate = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(&clean)
+            .args(["-c:a", "libmp3lame", "-b:a", "128k"])
+            .arg(dir.join("lossy.mp3"))
+            .output()
+            .expect("ffmpeg should transcode to mp3");
+        assert!(rate.status.success());
+        let back = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(dir.join("lossy.mp3"))
+            .args(["-c:a", "flac"])
+            .arg(&transcode)
+            .output()
+            .expect("ffmpeg should re-encode to FLAC");
+        assert!(back.status.success());
+
+        let run = |file: &PathBuf| {
+            let output = Command::new(&lossprint)
+                .args(["-o", "jsonl", "--jobs", "1", "--"])
+                .arg(file)
+                .output()
+                .expect("lossprint should run");
+            assert!(
+                output.status.success(),
+                "lossprint failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            parse_lossprint_output(&String::from_utf8_lossy(&output.stdout), file)
+                .expect("lossprint output should parse")
+        };
+        assert!(run(&clean).clean);
+        let flagged = run(&transcode);
+        assert!(!flagged.clean);
+        assert!(flagged.probability >= 0.5);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

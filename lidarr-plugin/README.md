@@ -13,4 +13,4 @@ For an existing compose stack, `/config/audio-integrity.json` is also supported:
 {"url":"http://audio-integrity:8080","token":"shared secret"}
 ```
 
-The plugin fails closed: an unavailable service, missing configuration, invalid response, timeout, or corrupt file rejects the import. A `likely_lossy` authenticity result is logged as a warning but does not reject the structurally healthy file because spectral detection is heuristic.
+The plugin fails closed: an unavailable service, missing configuration, invalid response, timeout, or rejected file prevents import. The service accepts a FLAC only after a healthy strict decode and a `likely_genuine` Lossprint result; `likely_lossy` or unavailable authenticity analysis blocks it before library mutation.

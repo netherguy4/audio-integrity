@@ -3,12 +3,12 @@
 Read-only, self-hosted verification for large audio libraries.
 
 - FLAC integrity: full decode and STREAMINFO MD5 verification through the Xiph reference `flac --test` command.
-- Lossless authenticity: separate spectral heuristic powered by the Rust `isflac` analyzer. Its `likely lossy` result is evidence, not proof, and does not override a healthy integrity verdict.
+- FLAC authenticity: Lossprint 1.1.0 with its embedded 1.0 model classifies spectral and temporal evidence at the published 0.5 transcode threshold. A mastering cutoff alone is no longer the classifier. Results remain probabilistic, not proof of provenance.
 - Other formats: full FFmpeg audio decode; stderr at error level is treated as a failure even when FFmpeg exits zero.
 - Persistent SQLite evidence keyed by path, size, nanosecond mtime, and validator version.
 - Manual incremental or forced full scans. Three workers overlap validation, while first-pass disk reads stay sequential for HDD-friendly throughput.
 - Authenticated WebSocket updates keep every open console session on the same live scan state.
-- A fail-closed Lidarr import plugin asks the same service for an integrity verdict before any library mutation.
+- A fail-closed Lidarr import plugin asks the same service before any library mutation. FLAC import requires both a healthy strict decode and a positive `likely_genuine` authenticity result; suspected transcodes and unverified authenticity are rejected.
 
 The music, download, and manual-import mounts are read-only. Audio Integrity has no file mutation endpoints.
 
@@ -25,11 +25,14 @@ Optional variables include `ADMIN_USER`, `DATA_DIR`, `LIBRARY_ROOT`, `IMPORT_ROO
 ## Development
 
 ```sh
-mise install
-mise run check
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
 Run the container with a small read-only fixture directory mounted at `/music`; never point development scans at the production library.
+
+The Dockerfile packages the checksum-pinned Linux x86-64 Lossprint release and its model, with no runtime download or audio upload. Local authenticity checks require the same `lossprint` CLI on `PATH`, plus `flac` and FFmpeg. Changing the classifier changes `VALIDATOR_VERSION`, so unchanged files with old cutoff-only evidence are rechecked during the next incremental scan or import verification. Automation consumers must continue checking the current validator version before acting.
 
 ## Production deployment
 

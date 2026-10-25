@@ -72,7 +72,7 @@
         <div class="progress-block">
           <div class="progress-meta"><span id="progress-label">0 / 0</span><span id="progress-percent">0%</span></div>
           <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
-          <div class="current-file"><span data-i18n="currentFile">Сейчас проверяется</span><code id="current-path">—</code><small id="current-validator">flac --test · isflac spectrum</small></div>
+          <div class="current-file"><span data-i18n="currentFile">Сейчас проверяется</span><code id="current-path">—</code><small id="current-validator">flac --test · Lossprint</small></div>
           <div class="live-meta">
             <span><small data-i18n="throughput">Скорость чтения</small><strong id="live-throughput">—</strong></span>
             <span><small data-i18n="eta">Осталось примерно</small><strong id="live-eta">—</strong></span>
@@ -107,7 +107,7 @@
           <h2 data-i18n="resultTitle">Проверенные файлы</h2>
           <div class="filters"><select id="verdict-filter"><option value="all" data-i18n="allResults">Все файлы</option><option value="corrupt" data-i18n="onlyCorrupt">Не прошли проверку</option><option value="likely_lossy" data-i18n="onlySuspect">Возможно пережаты</option><option value="error" data-i18n="onlyErrors">Не удалось проверить</option><option value="healthy" data-i18n="onlyHealthy">Без ошибок</option></select><input id="search" type="search" data-i18n-placeholder="search" placeholder="Найти файл…"></div>
         </div>
-        <p class="auth-note" data-i18n="authNote">«Возможно пережат» означает, что спектральный анализ обнаружил признаки перекодирования из MP3/AAC. Это не означает, что файл повреждён.</p>
+        <p class="auth-note" data-i18n="authNote">Lossprint оценивает признаки перекодирования. Для импорта FLAC нужны исправный файл и результат «Похоже на lossless»; неподтверждённые файлы блокируются.</p>
         <div class="table-wrap">
           <table><thead><tr><th data-i18n="state">Результат</th><th data-i18n="path">Файл</th><th data-i18n="authenticity">Качество источника</th><th data-i18n="format">Формат</th><th data-i18n="checked">Дата проверки</th></tr></thead><tbody id="results-body"></tbody></table>
           <div id="results-empty" class="empty-state"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><strong data-i18n="noResults">Ещё нет проверенных файлов</strong><span data-i18n="noResultsLead">Запустите проверку, чтобы увидеть состояние медиатеки.</span></div>
@@ -132,6 +132,6 @@
     </main>
   </div>
   <script src="/metrics.js?v=20260903-3" defer></script>
-  <script src="/app.js?v=20260903-3" defer></script>
+  <script src="/app.js?v=20261025-lossprint1" defer></script>
 </body>
 </html>
