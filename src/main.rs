@@ -872,30 +872,74 @@ fn verify_one_with_connection(
         }
     }
     let format = extension(path).unwrap_or_else(|| "unknown".into());
-    let result = validate(path, disk_reader);
+    let audio_md5 = flac_audio_md5(path);
+    let known = match &audio_md5 {
+        Some(md5) => known_authenticity(connection, md5).map_err(|err| err.to_string())?,
+        None => None,
+    };
+    let result = validate(path, disk_reader, known);
     connection
         .execute(
             "INSERT INTO file_results
              (path, size, mtime_ns, validator_version, validator, format, verdict, authenticity,
-              authenticity_message, checked_at, duration_ms, message, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+              authenticity_message, checked_at, duration_ms, message, source, audio_md5)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(path) DO UPDATE SET
                size=excluded.size, mtime_ns=excluded.mtime_ns, validator_version=excluded.validator_version,
                validator=excluded.validator, format=excluded.format, verdict=excluded.verdict,
                authenticity=excluded.authenticity, authenticity_message=excluded.authenticity_message,
                checked_at=excluded.checked_at, duration_ms=excluded.duration_ms,
-               message=excluded.message, source=excluded.source",
+               message=excluded.message, source=excluded.source, audio_md5=excluded.audio_md5",
             params![
                 path_text.as_ref(), size as i64, mtime_ns, VALIDATOR_VERSION, result.validator,
                 format, result.verdict, result.authenticity, result.authenticity_message,
-                Utc::now().to_rfc3339(), result.duration_ms as i64, result.message, source
+                Utc::now().to_rfc3339(), result.duration_ms as i64, result.message, source, audio_md5
             ],
         )
         .map_err(|err| err.to_string())?;
     Ok((result, false))
 }
 
-fn validate(path: &Path, disk_reader: Option<&Mutex<()>>) -> Validation {
+/// STREAMINFO MD5 of the decoded audio, which retagging leaves unchanged.
+/// `None` for non-FLAC files, a leading ID3 tag or an encoder that left it unset.
+fn flac_audio_md5(path: &Path) -> Option<String> {
+    if extension(path).as_deref() != Some("flac") {
+        return None;
+    }
+    let mut header = [0u8; 42];
+    std::io::Read::read_exact(&mut fs::File::open(path).ok()?, &mut header).ok()?;
+    // The first metadata block must be a 34-byte STREAMINFO; bit 7 only marks the last block.
+    let streaminfo = &header[..4] == b"fLaC" && header[4] & 0x7f == 0 && header[5..8] == [0, 0, 34];
+    let md5 = &header[26..];
+    (streaminfo && md5.iter().any(|byte| *byte != 0))
+        .then(|| md5.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Lossprint verdict already reached for the same audio at another path,
+/// typically the staging copy Lidarr verified before moving it into the library.
+fn known_authenticity(
+    connection: &Connection,
+    audio_md5: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    connection
+        .query_row(
+            "SELECT authenticity, authenticity_message FROM file_results
+             WHERE audio_md5 = ?1 AND validator_version = ?2 AND verdict = 'healthy'
+               AND authenticity IN ('likely_genuine', 'likely_lossy')
+             ORDER BY checked_at DESC LIMIT 1",
+            params![audio_md5, VALIDATOR_VERSION],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+}
+
+/// `known_authenticity` is applied only after `flac --test` has matched the
+/// decoded audio against the STREAMINFO MD5 it was looked up by.
+fn validate(
+    path: &Path,
+    disk_reader: Option<&Mutex<()>>,
+    known_authenticity: Option<(String, String)>,
+) -> Validation {
     let disk_guard =
         disk_reader.map(|lock| lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     let start = Instant::now();
@@ -965,7 +1009,12 @@ fn validate(path: &Path, disk_reader: Option<&Mutex<()>>) -> Validation {
             }
         }
     };
-    if result.verdict == "healthy" && extension(path).as_deref() == Some("flac") {
+    if result.verdict == "healthy"
+        && let Some((authenticity, message)) = known_authenticity
+    {
+        result.authenticity = authenticity;
+        result.authenticity_message = message;
+    } else if result.verdict == "healthy" && extension(path).as_deref() == Some("flac") {
         // Lossprint 1.1 (pinned CLI, threshold 0.5) replaces the isflac heuristic.
         match Command::new("lossprint")
             .args(["-o", "jsonl", "--jobs", "1", "--"])
@@ -1252,6 +1301,17 @@ fn init_db(path: &Path) -> rusqlite::Result<()> {
             error_files INTEGER NOT NULL DEFAULT 0,
             total_bytes INTEGER NOT NULL DEFAULT 0
          );",
+    )?;
+    let has_audio_md5: bool = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('file_results') WHERE name='audio_md5'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_audio_md5 {
+        connection.execute_batch("ALTER TABLE file_results ADD COLUMN audio_md5 TEXT")?;
+    }
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS file_results_audio_md5_idx ON file_results(audio_md5)",
     )?;
     connection.execute(
         "UPDATE scan_runs SET status='cancelled', finished_at=?1 WHERE status='running'",
@@ -1577,6 +1637,80 @@ mod tests {
         run_scan(f.state.clone(), "incremental".into());
         assert_eq!(f.state.scan.lock().unwrap().skipped_files, 1);
         assert_eq!(load_summary(&f.state.db_path).unwrap().known_files, 1);
+    }
+
+    #[test]
+    fn reads_streaminfo_audio_md5_only_when_set() {
+        let f = Fixture::new();
+        let mut header = b"fLaC\x80\x00\x00\x22".to_vec();
+        header.extend([0u8; 18]);
+        header.extend(1u8..=16);
+        let write = |name: &str, bytes: &[u8]| {
+            let path = f.state.library_root.join(name);
+            fs::write(&path, bytes).unwrap();
+            path
+        };
+        assert_eq!(
+            flac_audio_md5(&write("set.flac", &header)).as_deref(),
+            Some("0102030405060708090a0b0c0d0e0f10")
+        );
+        assert_eq!(flac_audio_md5(&write("set.m4a", &header)), None);
+        let mut unset = header.clone();
+        unset[26..].fill(0);
+        assert_eq!(flac_audio_md5(&write("unset.flac", &unset)), None);
+        let mut id3 = header.clone();
+        id3[..4].copy_from_slice(b"ID3\x04");
+        assert_eq!(flac_audio_md5(&write("id3.flac", &id3)), None);
+        assert_eq!(flac_audio_md5(&write("short.flac", &header[..30])), None);
+    }
+
+    #[test]
+    fn reuses_only_a_current_conclusive_authenticity_verdict() {
+        let f = Fixture::new();
+        init_db(&f.state.db_path).expect("migration must be idempotent");
+        let connection = open_db(&f.state.db_path).unwrap();
+        let insert = |path: &str, version: &str, verdict: &str, authenticity: &str| {
+            connection
+                .execute(
+                    "INSERT INTO file_results
+                 (path,size,mtime_ns,validator_version,validator,format,verdict,authenticity,
+                  authenticity_message,checked_at,duration_ms,message,source,audio_md5)
+                 VALUES (?1,1,1,?2,'flac --test','flac',?3,?4,'staging verdict',
+                         '2026-01-01T00:00:00Z',1,'',?5,'abc')",
+                    params![path, version, verdict, authenticity, "lidarr"],
+                )
+                .unwrap();
+        };
+        insert(
+            "/downloads/old.flac",
+            "older-validator",
+            "healthy",
+            "likely_lossy",
+        );
+        insert(
+            "/downloads/pending.flac",
+            VALIDATOR_VERSION,
+            "healthy",
+            "unknown",
+        );
+        insert(
+            "/downloads/broken.flac",
+            VALIDATOR_VERSION,
+            "corrupt",
+            "likely_genuine",
+        );
+        assert_eq!(known_authenticity(&connection, "abc").unwrap(), None);
+        insert(
+            "/downloads/a.flac",
+            VALIDATOR_VERSION,
+            "healthy",
+            "likely_genuine",
+        );
+        assert_eq!(
+            known_authenticity(&connection, "abc").unwrap(),
+            Some(("likely_genuine".into(), "staging verdict".into()))
+        );
+        assert_eq!(known_authenticity(&connection, "other").unwrap(), None);
     }
 
     #[test]
